@@ -1,0 +1,22 @@
+# Rust build output (keep Cargo.lock once the application exists)
+/target/
+/dist/
+/build/
+**/*.rs.bk
+
+# Local diagnostics and rendered-test output
+*.log
+/tests/rendered/artifacts/
+/coverage/
+*.profraw
+*.profdata
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
