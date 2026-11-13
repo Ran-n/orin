@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:34.382590 )
-[//]: # (+ Revised: 	2026/11/13 07:53:53.034413 )
+[//]: # (+ Revised: 	2026/11/13 15:46:05.133611 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -253,6 +253,9 @@ opt-out, asking GitHub first and GitLab when GitHub can't answer.
   `macos-aarch64`) and attaches each with a BLAKE3 `.b3` file to a draft GitHub release. The names come from
   `update::target::asset_name` (`orin-<version>-<target>`, `.exe` on Windows), printed for the workflow by
   `orin-asset-name`, so CI and the client can't drift apart. A tag that doesn't match `Cargo.toml` fails before building.
+  Windows also ships an Inno Setup installer (`orin-<version>-windows-x86_64-setup.exe`) with its own `.b3`.
+  It installs per user in `%LOCALAPPDATA%\Programs\Orin`, adds shortcuts and an uninstaller, and leaves settings on uninstall.
+  The installed executable uses the same updater as the portable build; no elevation is needed for either installation or updates.
 - **Which build:** release builds are compiled with `ORIN_RELEASE_TARGET`. Any other build is from source and never
   checks or replaces itself, so `target/debug/orin` or a hand-made binary can't be overwritten.
 - **Check:** `releases/latest` from GitHub, then GitLab's `releases/permalink/latest` when GitHub fails (network,
@@ -296,4 +299,4 @@ The first implementation settled several areas in code. They can still be revisi
 | 6 | Privacy and connectivity | No telemetry; network use is `npx` fetching a missing adapter, and a daily update check against GitHub (GitLab if GitHub can't be reached), which you can turn off in Settings › Updates; neither sends any personal data | A written privacy policy for releases |
 | 7 | Platform support | Verified on Windows; CI builds and tests Windows, Linux, and macOS | Minimum OS versions, CPU architectures, graphics requirements |
 | 8 | Performance | — | Budgets for startup time, idle memory and CPU, and streaming output from several agents |
-| 9 | UI and distribution | English only; four themes; native rendered UI tests on Windows; portable release binaries with BLAKE3 checksums and in-app updates ([ADR-009](#adr-009-self-updating-portable-binaries)) | Linux and macOS rendered tests, other locales and themes, installers, signing, and rollback |
+| 9 | UI and distribution | English only; four themes; native rendered UI tests on Windows; Windows installer and portable release binaries with BLAKE3 checksums and in-app updates ([ADR-009](#adr-009-self-updating-portable-binaries)) | Linux and macOS rendered tests, other locales and themes, Linux/macOS installers, signing, and rollback |

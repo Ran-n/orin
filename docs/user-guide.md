@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:34.241299 )
-[//]: # (+ Revised: 	2026/11/13 08:56:38.825473 )
+[//]: # (+ Revised: 	2026/11/13 15:43:58.538934 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -9,8 +9,10 @@
 
 ## Current Availability
 
-Orin is in early development. Download the portable program from the [latest release](https://github.com/Ran-n/orin/releases/latest)
-(see [Download and install](../README.md#download-and-install)) or run it [from source](../README.md#run-from-source). There are no installers yet.
+Orin is in early development. Download the Windows installer or a portable program from the [latest release](https://github.com/Ran-n/orin/releases/latest)
+(see [Download and install](../README.md#download-and-install)) or run it [from source](../README.md#run-from-source).
+The Windows installer adds Orin to the Start menu and Windows Installed apps, with an optional desktop shortcut.
+It installs for your user without administrator access. Uninstall removes the program and shortcuts while keeping your settings.
 
 | Area | Status |
 | --- | --- |

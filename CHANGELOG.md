@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.826510 )
-[//]: # (+ Revised: 	2026/11/13 08:56:38.901728 )
+[//]: # (+ Revised: 	2026/11/13 15:50:00.276636 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -12,6 +12,15 @@ All notable changes to Orin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+### Added
+
+- Added a Windows installer with per-user installation, Start menu and optional desktop shortcuts, and uninstall support
+- Added installer install, reinstall, shortcut, version, and uninstall checks to Windows release builds
+
+### Fixed
+
+- Fixed an extra console window opening when launching Orin on Windows
 
 ## [0.1.0] - 2026-11-13
 

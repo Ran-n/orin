@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.694237 )
-[//]: # (+ Revised: 	2026/11/13 08:56:38.755773 )
+[//]: # (+ Revised: 	2026/11/13 15:43:58.452051 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -94,16 +94,18 @@ See the [vision](docs/vision.md) for the full picture, including an example sess
 
 Download the file for your system from the [latest release](https://github.com/Ran-n/orin/releases/latest)
 (also on [GitLab](https://gitlab.com/Ran-n/orin/-/releases) and [Codeberg](https://codeberg.org/ran-n/orin/releases)).
-Orin is a single portable program: there is nothing to install, so put it in a folder of your choice and open it.
+On Windows, choose the setup program to install Orin for your user, add a Start menu shortcut, and register an uninstaller.
+An optional desktop shortcut is available during setup. Portable downloads are also available.
 
 | System | File |
 | --- | --- |
+| Windows installer (64-bit) | `orin-<version>-windows-x86_64-setup.exe` |
 | Windows (64-bit) | `orin-<version>-windows-x86_64.exe` |
 | Linux (64-bit) | `orin-<version>-linux-x86_64` |
 | macOS (Apple silicon) | `orin-<version>-macos-aarch64` |
 
 Each file has a `.b3` checksum next to it. Orin checks for a new version once a day and updates itself from
-**Settings › Updates**; you can turn that off there. Installers come later.
+**Settings › Updates**; you can turn that off there. The Windows installer preserves your settings on upgrades and uninstall.
 
 > [!NOTE]
 > The downloads aren't signed yet. On Windows, SmartScreen may say it "protected your PC": choose **More info** › **Run anyway**.

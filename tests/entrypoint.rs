@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 15:12:10.485713
-//+ Revised: 	2026/11/12 15:12:44.273721
+//+ Revised: 	2026/11/13 15:43:58.733622
 // -----------------------------------------------------------------------------
 
 #![cfg(feature = "desktop")]
@@ -39,4 +39,19 @@ fn integration_invalid_startup_has_a_failure_status_and_structured_diagnostics()
     assert_eq!(logged["level"], "ERROR");
     assert_eq!(logged["target"], "orin::startup");
     assert!(error.contains("Run orin --help"));
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_executable_uses_gui_subsystem() {
+    let executable = std::fs::read(env!("CARGO_BIN_EXE_orin")).unwrap();
+    let pe_offset = u32::from_le_bytes(executable[0x3c..0x40].try_into().unwrap()) as usize;
+    assert_eq!(&executable[pe_offset..pe_offset + 4], b"PE\0\0");
+    let subsystem_offset = pe_offset + 24 + 68;
+    let subsystem = u16::from_le_bytes(
+        executable[subsystem_offset..subsystem_offset + 2]
+            .try_into()
+            .unwrap(),
+    );
+    assert_eq!(subsystem, 2, "Orin must not allocate a console at launch");
 }

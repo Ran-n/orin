@@ -1,6 +1,6 @@
 name: Release
 
-# Pushing a vX.Y.Z tag builds one portable binary per target, each with a BLAKE3 `.b3`, and
+# Pushing a vX.Y.Z tag builds portable binaries and a Windows installer, each with a BLAKE3 `.b3`, and
 # attaches them to a draft GitHub release. The asset names come from `orin-asset-name`, the same
 # rule the in-app updater uses, so the two can never disagree.
 
@@ -77,6 +77,21 @@ jobs:
           # Pinned, so a new b3sum release can't change what checksums the updater verifies.
           cargo install b3sum --locked --version 1.8.7
           (cd dist && b3sum "$asset" > "$asset.b3" && b3sum --check "$asset.b3")
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./packaging/windows/build-installer.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./packaging/windows/test-installer.ps1 -Installer (Get-Item dist/*-setup.exe).FullName
+          Push-Location dist
+          try {
+            $installer = Get-Item *-setup.exe
+            b3sum $installer.Name | Set-Content -Encoding utf8 "$($installer.Name).b3"
+            if ($LASTEXITCODE -ne 0) { throw 'Installer checksum failed.' }
+            b3sum --check "$($installer.Name).b3"
+            if ($LASTEXITCODE -ne 0) { throw 'Installer checksum verification failed.' }
+          } finally { Pop-Location }
       - uses: actions/upload-artifact@v4
         with:
           name: orin-${{ matrix.target }}
@@ -114,6 +129,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
-          test "$(ls dist | wc -l)" -eq 6
+          test "$(ls dist | wc -l)" -eq 8
           gh release create "$GITHUB_REF_NAME" --draft \
             --title "Orin ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/*

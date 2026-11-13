@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:34.092613 )
-[//]: # (+ Revised: 	2026/11/12 22:43:41.206563 )
+[//]: # (+ Revised: 	2026/11/13 15:58:36.457667 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -62,6 +62,8 @@ Domain modules have no GPUI dependency and are tested without a window: `cargo t
 - [Rust](https://www.rust-lang.org/tools/install) through `rustup`. The first build installs the toolchain pinned in `rust-toolchain.toml` automatically.
 - [Git](https://git-scm.com/), which is also used at runtime for diffs.
 - **Windows:** the MSVC build tools (Visual Studio Build Tools with the C++ workload).
+  If GPUI cannot find `fxc.exe`, set `GPUI_FXC_PATH` to the shader compiler in your installed
+  Windows SDK's `bin/<sdk-version>/x64/` directory before building.
 - **macOS:** the Xcode command-line tools.
 - **Linux:** the native libraries CI installs, for example on Ubuntu:
 
@@ -79,6 +81,8 @@ cargo run -- --settings FILE      # use a separate settings file, e.g. to keep y
 ```
 
 Set `ORIN_LOG` to change logging, for example `ORIN_LOG=orin=debug`. Logs are JSON on standard error.
+On Windows, Orin uses the GUI subsystem so launching the executable does not open a console window.
+Redirect standard error to a file when collecting diagnostics (for example, `orin.exe 2> orin.log`).
 `.env.example` lists the optional environment variables; Orin does not load it automatically.
 `PATH` locates Git, agent CLIs and adapters. The terminal uses `ComSpec` on Windows and `SHELL` on Unix,
 with a system shell fallback. Those variables are managed by your operating system and shell.
@@ -198,11 +202,12 @@ Record changes under **Unreleased** in [CHANGELOG.md](../CHANGELOG.md), in the s
 
 ## Releases
 
-A release is one portable binary per target, each with a BLAKE3 checksum, which Orin's updater downloads
+A release includes a Windows installer and one portable binary per target, each with a BLAKE3 checksum. Orin's updater downloads the portable binary
 ([ADR-009](design-decisions.md#adr-009-self-updating-portable-binaries)):
 
 | Runner | Target | Asset |
 | --- | --- | --- |
+| `windows-latest` | `windows-x86_64` installer | `orin-<version>-windows-x86_64-setup.exe` |
 | `windows-latest` | `windows-x86_64` | `orin-<version>-windows-x86_64.exe` |
 | `ubuntu-24.04` | `linux-x86_64` | `orin-<version>-linux-x86_64` |
 | `macos-latest` | `macos-aarch64` | `orin-<version>-macos-aarch64` |
@@ -210,15 +215,25 @@ A release is one portable binary per target, each with a BLAKE3 checksum, which 
 Next to each asset is `<asset>.b3`, one `b3sum` line. The names come from `update::target::asset_name`;
 the workflow asks `cargo run --bin orin-asset-name -- <target>` instead of spelling them out.
 
+To build the Windows installer locally, install [Inno Setup 6](https://jrsoftware.org/isinfo.php),
+run `cargo build --locked --release --bin orin`, then `./packaging/windows/build-installer.ps1` in PowerShell.
+The script reads the version from Cargo and writes the setup executable to `dist/`.
+Setup installs to `%LOCALAPPDATA%\Programs\Orin`, with Start menu and optional desktop shortcuts and an uninstaller.
+This writable per-user location also supports the existing in-app updater. Settings are preserved on uninstall.
+Run `./packaging/windows/test-installer.ps1 -Installer dist/orin-<version>-windows-x86_64-setup.exe`
+to check installation, both shortcuts, the installed version, reinstall, and uninstall. The test refuses
+to run over an existing Orin installation or shortcuts and cleans up its temporary installation.
+The Windows release job runs the same test before uploading the installer.
+
 Release builds are compiled with `ORIN_RELEASE_TARGET=<target>`. Without it (`cargo run`, `cargo build`) the binary is a
 build from source: it never checks for or installs updates. Debug builds also read `ORIN_RELEASE_TARGET`,
 `ORIN_UPDATE_SOURCES=<github-url>|<gitlab-url>` and `ORIN_UPDATE_DIR` at run time for tests; release builds ignore them.
 
 1. Promote **Unreleased** in the changelog to `## [X.Y.Z]` and set `version` in `Cargo.toml` to the same number.
 2. Push the tag `vX.Y.Z`. [`release.yml`](../.github/workflows/release.yml) fails at once if the tag and `Cargo.toml`
-   disagree, then builds the three targets and creates a **draft** GitHub release with the six files and that version's
+   disagree, then builds the three targets and Windows installer and creates a **draft** GitHub release with the eight files and that version's
    changelog section.
 3. Download the draft's files and check every one with `b3sum --check <asset>.b3`.
-4. Attach the same six files to the GitLab release (`glab release create vX.Y.Z <files>`) and the Codeberg release.
+4. Attach the same eight files to the GitLab release (`glab release create vX.Y.Z <files>`) and the Codeberg release.
    GitLab must have every asset and `.b3`: the updater falls back to it when GitHub can't answer.
 5. Publish the GitHub draft. Orin's update check only sees published, non-pre-release releases.
