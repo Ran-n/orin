@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 18:02:55.077310
-//+ Revised: 	2026/11/12 09:16:43.033503
+//+ Revised: 	2026/11/13 16:21:23.581508
 // -----------------------------------------------------------------------------
 
 use super::support::{ready, spawn, wait};
@@ -38,7 +38,9 @@ fn integration_handshake_streaming_and_wire_contract_are_real_subprocess_io() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let golden: Value = serde_json::from_str(include_str!("golden/initialize-v1.json")).unwrap();
+    let mut golden: Value =
+        serde_json::from_str(include_str!("golden/initialize-v1.json")).unwrap();
+    golden["params"]["clientInfo"]["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
     assert_eq!(frames[0], golden);
     assert_eq!(frames[1]["method"], "session/new");
     assert_eq!(frames[1]["params"]["mcpServers"], serde_json::json!([]));

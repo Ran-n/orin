@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:50:00.412454
-//+ Revised: 	2026/11/12 15:03:20.503905
+//+ Revised: 	2026/11/13 16:19:59.736479
 // -----------------------------------------------------------------------------
 
 use super::{AgentSnapshot, AgentStatus, Provider, permissions, protocol, transport, updates};
@@ -23,8 +23,10 @@ fn permission(option: &str) -> Value {
 
 #[test]
 fn contract_initialize_matches_checked_in_v1_golden() {
-    let golden: Value =
+    let mut golden: Value =
         serde_json::from_str(include_str!("../../tests/agents/golden/initialize-v1.json")).unwrap();
+    // The wire contract is stable; the advertised client version follows each release.
+    golden["params"]["clientInfo"]["version"] = json!(env!("CARGO_PKG_VERSION"));
     assert_eq!(protocol::initialize(), golden);
     assert_eq!(
         protocol::new_session("/project", 2)["params"],

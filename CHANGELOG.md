@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.826510 )
-[//]: # (+ Revised: 	2026/11/13 16:12:40.650122 )
+[//]: # (+ Revised: 	2026/11/13 16:19:59.805719 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Fixed an extra console window opening when launching Orin on Windows
+- Fixed release checks comparing the ACP handshake against an outdated version
 
 ## [0.1.0] - 2026-11-13
 
