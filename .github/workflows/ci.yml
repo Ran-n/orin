@@ -1,0 +1,60 @@
+name: Rust checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config clang cmake libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev libvulkan1
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --locked --no-default-features
+      - name: Test native desktop code
+        run: cargo test --locked --all-features
+      - name: Build native desktop
+        run: cargo build --locked --bin orin
+      - name: Install coverage tool
+        if: runner.os == 'Windows'
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: Domain coverage gate
+        if: runner.os == 'Windows'
+        run: cargo coverage
+      - name: Whole application coverage gate
+        if: runner.os == 'Windows'
+        run: cargo coverage-all
+
+  audit:
+    name: Dependency advisories
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install dependency audit tool
+        run: cargo install cargo-audit --version 0.22.2 --locked
+      - name: Audit pinned dependencies
+        run: cargo audit

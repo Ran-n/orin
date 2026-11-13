@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "project": null,
+  "selected_file": "src/main.rs",
+  "viewer_mode": "staged",
+  "markdown_preview": true,
+  "editor_cursor": 17,
+  "selected_provider": "gemini",
+  "active_session": 2,
+  "columns": {
+    "order": [
+      "files",
+      "terminal",
+      "code",
+      "agents"
+    ],
+    "files": {
+      "width": 260.0,
+      "collapsed": false
+    },
+    "agents": {
+      "width": 480.0,
+      "collapsed": false
+    },
+    "code": {
+      "width": 380.0,
+      "collapsed": false
+    },
+    "terminal": {
+      "width": 280.0,
+      "collapsed": true
+    }
+  },
+  "appearance": {
+    "theme": "gruvbox_light",
+    "text_size": 15.0,
+    "interface_font": "Inter",
+    "code_font": "JetBrains Mono"
+  },
+  "page": {
+    "settings": "accounts"
+  },
+  "recent_projects": [],
+  "agent_options": {
+    "claude": {
+      "model": "opus"
+    }
+  },
+  "width": 1440.0,
+  "height": 900.0,
+  "position": [
+    50.0,
+    -12.0
+  ],
+  "expanded_folders": [
+    "src",
+    "docs"
+  ],
+  "updates": {
+    "check_automatically": false,
+    "last_check": 1795000000,
+    "skipped_version": "0.3.0"
+  }
+}

@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.961358 )
-[//]: # (+ Revised: 	2026/11/11 12:43:49.489656 )
+[//]: # (+ Revised: 	2026/11/12 09:16:13.147042 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -24,44 +24,43 @@ Thank you for your interest in contributing.
 
 Treat everyone with respect. Harassment, discrimination, personal attacks, and bad-faith participation are not acceptable.
 Discuss ideas and technical decisions constructively, and respect people's privacy.
+For conduct concerns or reports unsuitable for public discussion, contact the maintainer using the Founder's Email field in [CONTRIBUTORS](CONTRIBUTORS).
 
 ---
 
 ## Reporting Bugs
 
-Open an issue on the repository host containing:
+Open an issue on [GitHub](https://github.com/Ran-n/orin/issues), [GitLab](https://gitlab.com/Ran-n/orin/-/issues),
+or [Codeberg](https://codeberg.org/ran-n/orin/issues) containing:
 
 - A clear, specific title
 - Steps to reproduce the problem
 - Expected behavior and actual behavior
-- Relevant environment details, including operating system and application version when applicable
+- Your operating system, how you ran Orin (commit and command), and which agents were involved
 - Relevant logs or screenshots, with credentials and private project information removed
 
-The current repository contains documentation only; documentation errors can also be reported.
+Search existing reports first and link related issues across mirrors.
 
 ---
 
 ## Suggesting Features
 
 Describe the problem, your proposed solution, and alternatives you considered.
-Explain how the proposal serves Orin's [product vision](docs/vision.md).
-Use the repository host's issue tracker to discuss the proposal.
-
-Rust + GPUI and desktop targets for Windows, Linux, and macOS are approved.
-Application implementation is outside the current repository-and-documentation scaffold.
+Explain how the proposal serves Orin's [product vision](docs/vision.md) and fits its [scope](docs/vision.md#scope).
+Proposals that contradict an accepted [design decision](docs/design-decisions.md) should explain why that decision should change.
 
 ---
 
 ## Submitting Changes
 
-1. Fork the repository and clone your fork.
+1. Fork the repository on your chosen [mirror](docs/development.md#get-the-repository) and clone your fork.
 2. Create a focused branch from `main`.
 3. Make the change, update the relevant documentation, and run applicable checks from the [development guide](docs/development.md).
 4. Prepare the changelog when preparing the commit, then commit using the style below.
 5. Open a pull request against `main`.
 6. Describe why the change is needed, its behavior or documentation impact, and how you verified it.
 
-Keep each pull request focused on one concern. Run applicable tests when a change introduces or modifies code.
+Keep each pull request focused on one concern, and include tests with any code change.
 Do not include credentials, private configuration, or unrelated generated files.
 
 ---

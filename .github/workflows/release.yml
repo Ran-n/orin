@@ -1,0 +1,119 @@
+name: Release
+
+# Pushing a vX.Y.Z tag builds one portable binary per target, each with a BLAKE3 `.b3`, and
+# attaches them to a draft GitHub release. The asset names come from `orin-asset-name`, the same
+# rule the in-app updater uses, so the two can never disagree.
+
+on:
+  push:
+    tags: ['v*']
+
+# Read-only by default; only the publish job may write the release.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Compare versions
+        run: |
+          crate="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $crate"
+            exit 1
+          fi
+
+  build:
+    name: Build / ${{ matrix.target }}
+    needs: verify
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x86_64
+            binary: orin.exe
+          - os: ubuntu-24.04
+            target: linux-x86_64
+            binary: orin
+          - os: macos-latest
+            target: macos-aarch64
+            binary: orin
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ORIN_RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes pkg-config clang cmake libasound2-dev libfontconfig-dev libfreetype-dev libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev libvulkan1
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Build release binary
+        run: cargo build --locked --release --bin orin
+      - name: Name and checksum the asset
+        run: |
+          # Release profile without the desktop feature: reuses the release build's dependencies
+          # instead of compiling GPUI again in debug just to print a file name.
+          asset="$(cargo run --locked --release --quiet --no-default-features --bin orin-asset-name -- "$ORIN_RELEASE_TARGET")"
+          mkdir dist
+          cp "target/release/${{ matrix.binary }}" "dist/$asset"
+          if [ "$RUNNER_OS" != "Windows" ]; then chmod 755 "dist/$asset"; fi
+          # Pinned, so a new b3sum release can't change what checksums the updater verifies.
+          cargo install b3sum --locked --version 1.8.7
+          (cd dist && b3sum "$asset" > "$asset.b3" && b3sum --check "$asset.b3")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orin-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Draft GitHub release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Cut this version's changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          test "$(ls dist | wc -l)" -eq 6
+          gh release create "$GITHUB_REF_NAME" --draft \
+            --title "Orin ${GITHUB_REF_NAME#v}" --notes-file notes.md dist/*

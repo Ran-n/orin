@@ -1,0 +1,21 @@
+﻿{
+  "schema_version": 1,
+  "project": null,
+  "selected_file": "src/main.rs",
+  "viewer_mode": 2,
+  "editor_cursor": 17,
+  "active_pane": "code",
+  "selected_provider": "gemini",
+  "active_session": 2,
+  "terminal_visible": false,
+  "width": 1440.0,
+  "height": 900.0,
+  "position": [
+    50.0,
+    -12.0
+  ],
+  "expanded_folders": [
+    "src",
+    "docs"
+  ]
+}

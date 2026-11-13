@@ -1,0 +1,86 @@
+[package]
+name = "orin"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+default-run = "orin"
+description = "An agent-first desktop development environment by Breren"
+license-file = "LICENSE"
+repository = "https://github.com/Ran-n/orin"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:gpui", "dep:image", "dep:pulldown-cmark", "dep:syntect"]
+test-support = ["desktop", "gpui/test-support"]
+agent-fixture = []
+
+[[bin]]
+name = "orin"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "orin-asset-name"
+path = "src/bin/orin-asset-name.rs"
+test = false
+
+[[bin]]
+name = "orin-acp-fixture"
+path = "tests/agents/fixture.rs"
+required-features = ["agent-fixture"]
+test = false
+
+[dependencies]
+anyhow = "1"
+blake3 = "1"
+directories = "6"
+gpui = { version = "=0.2.2", optional = true }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
+jiff = "0.2"
+portable-pty = "=0.9.0"
+self-replace = "1"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+vt100 = "0.15"
+unicode-segmentation = "1"
+notify = "8.2"
+pulldown-cmark = { version = "0.13", default-features = false, optional = true }
+syntect = { version = "5", default-features = false, features = ["default-syntaxes", "regex-fancy"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security", "Win32_System_Pipes", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_Diagnostics_ToolHelp"] }
+
+[build-dependencies]
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }
+winresource = "0.1"
+
+[dev-dependencies]
+proptest = "1"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Storage_Xps", "Win32_UI_HiDpi", "Win32_System_LibraryLoader"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test.package."*"]
+debug = false
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+

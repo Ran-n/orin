@@ -1,0 +1,5 @@
+[alias]
+# Measured on Windows; the domain suite includes the offline ACP subprocess fixture.
+coverage = "llvm-cov --locked --no-default-features --features agent-fixture --fail-under-lines 92 --show-missing-lines"
+# Includes the desktop code and CLI entrypoint; interactive rendered tests run separately.
+coverage-all = "llvm-cov --locked --all-features --fail-under-lines 48 --show-missing-lines"

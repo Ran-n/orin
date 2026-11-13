@@ -1,0 +1,65 @@
+{
+  "name": "Orin 0.3.0",
+  "tag_name": "v0.3.0",
+  "description": "### Added\n- Example.",
+  "created_at": "2026-12-01T10:00:00.000Z",
+  "released_at": "2026-12-01T10:30:00.000Z",
+  "upcoming_release": false,
+  "assets": {
+    "count": 10,
+    "sources": [
+      {
+        "format": "zip",
+        "url": "https://gitlab.com/Ran-n/orin/-/archive/v0.3.0/orin-v0.3.0.zip"
+      }
+    ],
+    "links": [
+      {
+        "id": 1,
+        "name": "orin-0.3.0-windows-x86_64.exe",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000000/orin-0.3.0-windows-x86_64.exe",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-windows-x86_64.exe",
+        "link_type": "package"
+      },
+      {
+        "id": 2,
+        "name": "orin-0.3.0-windows-x86_64.exe.b3",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000001/orin-0.3.0-windows-x86_64.exe.b3",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-windows-x86_64.exe.b3",
+        "link_type": "package"
+      },
+      {
+        "id": 3,
+        "name": "orin-0.3.0-linux-x86_64",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000002/orin-0.3.0-linux-x86_64",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-linux-x86_64",
+        "link_type": "package"
+      },
+      {
+        "id": 4,
+        "name": "orin-0.3.0-linux-x86_64.b3",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000003/orin-0.3.0-linux-x86_64.b3",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-linux-x86_64.b3",
+        "link_type": "package"
+      },
+      {
+        "id": 5,
+        "name": "orin-0.3.0-macos-aarch64",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000004/orin-0.3.0-macos-aarch64",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-macos-aarch64",
+        "link_type": "package"
+      },
+      {
+        "id": 6,
+        "name": "orin-0.3.0-macos-aarch64.b3",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000005/orin-0.3.0-macos-aarch64.b3",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-macos-aarch64.b3",
+        "link_type": "package"
+      }
+    ]
+  },
+  "_links": {
+    "closed_issues_url": "https://gitlab.com/Ran-n/orin/-/issues?release_tag=v0.3.0&scope=all&state=closed",
+    "self": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0"
+  }
+}
