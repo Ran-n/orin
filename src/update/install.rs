@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:38.076712
-//+ Revised: 	2026/11/13 07:53:51.171907
+//+ Revised: 	2026/11/13 13:36:35.564455
 // -----------------------------------------------------------------------------
 
 //! Swapping a verified download in for the running binary, and starting it afterwards.
@@ -211,10 +211,11 @@ mod tests {
     #[test]
     fn unit_relaunch_starts_the_program_and_reports_a_missing_one() {
         // A harmless program that exits at once with no input: `cmd` on Windows, `true` elsewhere.
+        // `/usr/bin/true` exists on both Linux and macOS; macOS has no `/bin/true`.
         let harmless = if cfg!(windows) {
             PathBuf::from(std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into()))
         } else {
-            PathBuf::from("/bin/true")
+            PathBuf::from("/usr/bin/true")
         };
         let relaunched = Relaunch {
             executable: harmless,
