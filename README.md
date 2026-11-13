@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.694237 )
-[//]: # (+ Revised: 	2026/11/13 15:43:58.452051 )
+[//]: # (+ Revised: 	2026/11/13 16:12:40.730316 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -39,7 +39,8 @@ An agent-first development environment by **Breren**, for developers who direct 
 
 ## Project status
 
-Orin is in **early development**. Version 0.1.0 is the first release: it opens projects, runs Claude Code, Codex,
+Orin is in **early development**. Version 0.2.0 adds a Windows installer and launches without an extra console window.
+It opens projects, runs Claude Code, Codex,
 and Gemini CLI side by side, shows each permission request for your answer, and lets you review and edit the results.
 It has been verified on Windows; the Linux and macOS downloads are built but not yet verified on those systems.
 Open questions are tracked in the [decision register](docs/design-decisions.md#implementation-status-of-open-areas).

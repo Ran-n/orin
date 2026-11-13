@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.826510 )
-[//]: # (+ Revised: 	2026/11/13 15:50:00.276636 )
+[//]: # (+ Revised: 	2026/11/13 16:12:40.650122 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -12,6 +12,8 @@ All notable changes to Orin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-11-13
 
 ### Added
 
