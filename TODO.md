@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/12 13:19:21.692778 )
-[//]: # (+ Revised: 	2026/11/13 13:22:54.431259 )
+[//]: # (+ Revised: 	2026/11/13 14:36:32.437273 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 # TODO
@@ -14,7 +14,7 @@ Next item number: 10
 
 ## Index
 
-8. [Prove the release workflow with a throwaway tag](#8-prove-the-release-workflow-with-a-throwaway-tag)
+8. [Prove a mismatched release tag stops at verify](#8-prove-a-mismatched-release-tag-stops-at-verify)
 9. [Draw only the visible rows of the diff view](#9-draw-only-the-visible-rows-of-the-diff-view)
 
 ## Adding an item
@@ -78,60 +78,44 @@ Next item number: 10
 
 ---
 
-## 8. Prove the release workflow with a throwaway tag
+## 8. Prove a mismatched release tag stops at verify
 
-**Why:** `.github/workflows/release.yml` (tag `v*` → verify the tag matches
-`Cargo.toml`, build `windows-x86_64`, `linux-x86_64` and `macos-aarch64` with
-`ORIN_RELEASE_TARGET`, name each binary with `orin-asset-name`, write a `.b3`
-with `b3sum`, then create a draft release with the version's changelog section)
-has never run. Running it means pushing tags to GitHub, which needs the owner's
-go-ahead. The in-app updater depends on its output names, so a mistake here
-breaks every update.
+**Why:** `.github/workflows/release.yml` ran for the real v0.1.0 tag
+(2026-11-13): all three targets built, the draft had six files that passed
+`b3sum --check`, and the notes were the changelog section. Its `verify` job,
+which must stop a tag that disagrees with `Cargo.toml` before any build, has
+only ever seen a matching tag. A bad tag that slipped through would publish
+binaries named with the wrong version, which the in-app updater would then offer.
 
-**Goal:** One throwaway run shows a draft release with exactly six files that
-all pass `b3sum --check`, and a mismatched tag stops at `verify`; nothing from
-the test is left on GitHub.
+**Goal:** One throwaway tag that differs from `Cargo.toml` fails in `verify`,
+no build job starts, and nothing from the test is left on GitHub.
 
 ### Behaviour
-- A tag equal to `Cargo.toml`'s version builds all three targets and creates a
-  draft (never published) release named `Orin <version>`.
-- A tag that differs from `Cargo.toml` fails in the `verify` job, before any
-  build.
-- The release notes are that version's `## [X.Y.Z]` section of `CHANGELOG.md`;
-  the `publish` job fails if the section is missing.
+- A tag that differs from `Cargo.toml` fails in the `verify` job with
+  "doesn't match Cargo.toml", and `build` and `publish` are skipped.
 
 ### Out of scope
-- Publishing a real release, and attaching files to GitLab and Codeberg (that is
-  the `dbp` release flow, described in `docs/development.md` "Releases").
+- Re-proving the build, checksum and notes steps (done by v0.1.0).
 
 ### Implementation
-1. On a scratch branch `release-test`, set `version = "0.0.0-test.1"` in
-   `Cargo.toml` (run `cargo update -p orin` so `Cargo.lock` agrees) and add
-   `## [0.0.0-test.1]` with one line to `CHANGELOG.md`. Commit.
-2. Push the branch and the tag `v0.0.0-test.1` to the `github` remote only.
-3. When the workflow ends, download the draft's files
-   (`gh release download v0.0.0-test.1 -D <scratch>`) and run
-   `b3sum --check <asset>.b3` for each of the three assets.
-4. Push the tag `v0.0.0-test.2` on the same commit and check that `verify`
-   fails with "doesn't match Cargo.toml".
-5. Clean up: `gh release delete v0.0.0-test.1 --yes`, delete both tags locally
-   and on `github` (`git push github :refs/tags/<tag>`), and delete the
-   `release-test` branch locally and remotely.
-6. Fix anything the run exposed in `release.yml`, then repeat steps 1 to 5.
+1. Push the tag `v0.0.0-test.1` on the current `main` commit to the `github`
+   remote only (`git tag v0.0.0-test.1 && git push github v0.0.0-test.1`).
+2. Watch the run (`gh run list -R Ran-n/orin --workflow release.yml`) and check
+   that `verify` failed with "doesn't match Cargo.toml" and no `build` job ran.
+3. Clean up: delete the tag locally and on `github`
+   (`git push github :refs/tags/v0.0.0-test.1`), and check that no release or
+   draft named `v0.0.0-test.1` exists (`gh release list -R Ran-n/orin`).
+4. If `verify` let the tag through, fix `release.yml` and repeat.
 
 ### Tests
-- The run itself; `tests/update_target.rs` already proves the naming rule the
-  workflow uses.
+- The run itself.
 
 ### Docs
-- `docs/development.md` "Releases": correct any step the run shows to be wrong.
-  No changelog line unless `release.yml` changes ("Fixed …" then).
+- None, unless `release.yml` changes ("Fixed …" in the changelog then).
 
 ### Done when
-- [ ] Draft release with three binaries and three `.b3`, all passing
-      `b3sum --check`.
-- [ ] A mismatched tag fails at `verify`.
-- [ ] Test release, tags and branch deleted from GitHub and locally.
+- [ ] A mismatched tag fails at `verify`, with no build.
+- [ ] The test tag is deleted from GitHub and locally.
 
 ## 9. Draw only the visible rows of the diff view
 
