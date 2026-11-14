@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the Linux and macOS lint check failing on the tool-path tests in `src/process/launch.rs`
+
 ## [0.3.0] - 2026-11-14
 
 ### Added

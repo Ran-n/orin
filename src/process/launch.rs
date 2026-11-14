@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:37:14.156451
-//+ Revised: 	2026/11/13 17:39:06.560175
+//+ Revised: 	2026/11/14 23:31:53.783121
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -235,72 +235,6 @@ pub(crate) fn shell_program() -> PathBuf {
     }
 }
 
-#[cfg(test)]
-mod tool_path_tests {
-    use super::*;
-
-    #[test]
-    fn platform_tool_discovery_retains_only_absolute_folders() {
-        let path = tool_path(&[], true).unwrap();
-        assert!(env::split_paths(&path).all(|folder| folder.is_absolute()));
-        #[cfg(windows)]
-        assert!(
-            !windows_tool_directories().is_empty(),
-            "Windows' registered tool paths must be discoverable without Explorer's PATH"
-        );
-    }
-
-    #[test]
-    fn nested_environment_paths_expand_and_unknown_variables_remain_literal() {
-        let lookup = |name: &str| match name {
-            "NODE" => Some("%ROOT%/node".into()),
-            "ROOT" => Some("C:/Tools Ω".into()),
-            "LOOP" => Some("%LOOP%/again".into()),
-            _ => None,
-        };
-        assert_eq!(
-            expand_environment("%NODE%/bin", lookup),
-            "C:/Tools Ω/node/bin"
-        );
-        assert_eq!(expand_environment("%MISSING%/bin", lookup), "%MISSING%/bin");
-        assert_eq!(expand_environment("folder%tail", lookup), "folder%tail");
-        assert_eq!(
-            expand_environment("%LOOP%", lookup),
-            "%LOOP%/again/again/again/again"
-        );
-    }
-
-    #[test]
-    fn configured_tool_folders_take_priority_and_survive_spaces_and_unicode() {
-        let folder = tempfile::Builder::new()
-            .prefix("orin tools Ω ")
-            .tempdir()
-            .unwrap();
-        let executable = folder.path().join(if cfg!(windows) {
-            "orin-tool-probe.exe"
-        } else {
-            "orin-tool-probe"
-        });
-        std::fs::write(&executable, "fixture").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let path = tool_path(&[folder.path().to_owned(), folder.path().to_owned()], false).unwrap();
-        assert_eq!(
-            resolve(Path::new("orin-tool-probe"), Some(&path)),
-            Some(executable)
-        );
-        assert_eq!(
-            env::split_paths(&path)
-                .filter(|entry| entry == folder.path())
-                .count(),
-            1
-        );
-    }
-}
-
 /// cmd.exe parses its own unquoted program path, so `C:\Windows/System32/cmd.exe` would turn
 /// `/System32/cmd.exe` into switches and exit with "The syntax of the command is incorrect."
 #[cfg(windows)]
@@ -368,6 +302,72 @@ fn batch_args(args: &[OsString]) -> Result<String> {
         })
         .collect::<Result<Vec<_>>>()
         .map(|arguments| arguments.join(" "))
+}
+
+#[cfg(test)]
+mod tool_path_tests {
+    use super::*;
+
+    #[test]
+    fn platform_tool_discovery_retains_only_absolute_folders() {
+        let path = tool_path(&[], true).unwrap();
+        assert!(env::split_paths(&path).all(|folder| folder.is_absolute()));
+        #[cfg(windows)]
+        assert!(
+            !windows_tool_directories().is_empty(),
+            "Windows' registered tool paths must be discoverable without Explorer's PATH"
+        );
+    }
+
+    #[test]
+    fn nested_environment_paths_expand_and_unknown_variables_remain_literal() {
+        let lookup = |name: &str| match name {
+            "NODE" => Some("%ROOT%/node".into()),
+            "ROOT" => Some("C:/Tools Ω".into()),
+            "LOOP" => Some("%LOOP%/again".into()),
+            _ => None,
+        };
+        assert_eq!(
+            expand_environment("%NODE%/bin", lookup),
+            "C:/Tools Ω/node/bin"
+        );
+        assert_eq!(expand_environment("%MISSING%/bin", lookup), "%MISSING%/bin");
+        assert_eq!(expand_environment("folder%tail", lookup), "folder%tail");
+        assert_eq!(
+            expand_environment("%LOOP%", lookup),
+            "%LOOP%/again/again/again/again"
+        );
+    }
+
+    #[test]
+    fn configured_tool_folders_take_priority_and_survive_spaces_and_unicode() {
+        let folder = tempfile::Builder::new()
+            .prefix("orin tools Ω ")
+            .tempdir()
+            .unwrap();
+        let executable = folder.path().join(if cfg!(windows) {
+            "orin-tool-probe.exe"
+        } else {
+            "orin-tool-probe"
+        });
+        std::fs::write(&executable, "fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = tool_path(&[folder.path().to_owned(), folder.path().to_owned()], false).unwrap();
+        assert_eq!(
+            resolve(Path::new("orin-tool-probe"), Some(&path)),
+            Some(executable)
+        );
+        assert_eq!(
+            env::split_paths(&path)
+                .filter(|entry| entry == folder.path())
+                .count(),
+            1
+        );
+    }
 }
 
 #[cfg(all(test, windows))]
