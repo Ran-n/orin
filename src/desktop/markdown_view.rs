@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 08:39:25.884327
-//+ Revised: 	2026/11/13 07:53:54.194715
+//+ Revised: 	2026/11/14 01:02:31.052076
 // -----------------------------------------------------------------------------
 
 //! Draws the Markdown preview in the Code column, live from the editor's text.
@@ -26,26 +26,78 @@ use gpui::{
 };
 use std::path::{Path, PathBuf};
 
-/// The preview's body text size and line height, as in VS Code.
-const BODY_TEXT: f32 = 14.0;
-const BODY_LINE: f32 = 22.0;
 const SIDE_PADDING: f32 = 26.0;
-/// A paragraph's margin: 1em.
-const PARAGRAPH_MARGIN: f32 = BODY_TEXT;
-const CODE_PADDING: f32 = 16.0;
 const CODE_RADIUS: f32 = 3.0;
-/// VS Code sets code lines at 1.357em.
-const CODE_LINE: f32 = 19.0;
 const QUOTE_BAR: f32 = 5.0;
-/// Where list text starts: the browser's 40 px list indent.
-const LIST_INDENT: f32 = 40.0;
 
-/// What blocks need while drawing: the file links are relative to, the workspace, and how deep
-/// in lists they sit.
+/// The sizes one kind of rendered Markdown is drawn with, in pixels at the default text size.
+#[derive(Debug, PartialEq)]
+pub struct Metrics {
+    /// Body text size and line height.
+    text: f32,
+    line: f32,
+    /// A paragraph's margin above and below.
+    paragraph: f32,
+    code_padding: f32,
+    code_line: f32,
+    /// Where list text starts.
+    list_indent: f32,
+    /// Each heading level's size as a multiple of the body text, and its margin as a multiple
+    /// of that size.
+    headings: [(f32, f32); 6],
+    /// Whether h1–h3 are drawn at normal weight with a rule under h1, as VS Code does.
+    document_headings: bool,
+}
+
+/// The file preview, as in VS Code: 14 px text on a 22 px line, a 1em paragraph margin, code
+/// lines at 1.357em, the browser's 40 px list indent and its heading sizes.
+pub const PREVIEW: Metrics = Metrics {
+    text: 14.0,
+    line: 22.0,
+    paragraph: 14.0,
+    code_padding: 16.0,
+    code_line: 19.0,
+    list_indent: 40.0,
+    headings: [
+        (2.0, 0.67),
+        (1.5, 0.83),
+        (1.17, 1.0),
+        (1.0, 1.33),
+        (0.83, 1.67),
+        (0.67, 2.33),
+    ],
+    document_headings: true,
+};
+
+/// An agent's reply in a conversation: the interface text size, tighter spacing, and headings
+/// that stay close to the body so a reply reads as a message rather than a document.
+pub const MESSAGE: Metrics = Metrics {
+    text: theme::TEXT_SIZE,
+    line: 20.0,
+    paragraph: 8.0,
+    code_padding: 10.0,
+    code_line: 18.0,
+    list_indent: 22.0,
+    headings: [
+        (1.3, 0.6),
+        (1.15, 0.65),
+        (1.0, 0.75),
+        (1.0, 0.75),
+        (1.0, 0.75),
+        (1.0, 0.75),
+    ],
+    document_headings: false,
+};
+
+/// Opens a link's destination when it is clicked.
+pub type LinkOpener = std::rc::Rc<dyn Fn(&str, &mut gpui::App)>;
+
+/// What blocks need while drawing: their sizes, what a clicked link does, and how deep in
+/// lists they sit.
 #[derive(Clone)]
-struct RenderContext<'a> {
-    file: &'a Path,
-    view: WeakEntity<Workspace>,
+struct RenderContext {
+    metrics: &'static Metrics,
+    open: LinkOpener,
     list_depth: usize,
 }
 
@@ -101,9 +153,10 @@ impl Workspace {
     /// The rendered form of `source`, the Markdown file at `file` (project-relative).
     pub fn markdown_preview(&self, file: &Path, source: &str, cx: &Context<Self>) -> AnyElement {
         let blocks = self.markdown_cache.blocks(source);
+        let (file, view) = (file.to_path_buf(), cx.weak_entity());
         let context = RenderContext {
-            file,
-            view: cx.weak_entity(),
+            metrics: &PREVIEW,
+            open: std::rc::Rc::new(move |destination, cx| open_link(&file, destination, &view, cx)),
             list_depth: 0,
         };
         let colors = preview_colors();
@@ -116,14 +169,14 @@ impl Workspace {
             .child(
                 theme::column()
                     .px(theme::scaled(SIDE_PADDING))
-                    .pb(theme::scaled(PARAGRAPH_MARGIN))
-                    .text_size(theme::scaled(BODY_TEXT))
-                    .line_height(theme::scaled(BODY_LINE))
+                    .pb(theme::scaled(PREVIEW.paragraph))
+                    .text_size(theme::scaled(PREVIEW.text))
+                    .line_height(theme::scaled(PREVIEW.line))
                     .text_color(rgb(colors.text))
                     .children(if blocks.is_empty() {
                         vec![
                             div()
-                                .mt(theme::scaled(PARAGRAPH_MARGIN))
+                                .mt(theme::scaled(PREVIEW.paragraph))
                                 .text_color(rgb(colors.muted))
                                 .child("This file is empty.")
                                 .into_any_element(),
@@ -137,31 +190,42 @@ impl Workspace {
     }
 }
 
-/// A heading's text size and margin in pixels at the base text size; browser defaults.
-fn heading_metrics(level: u8) -> (f32, f32) {
-    let (size, margin): (f32, f32) = match level {
-        1 => (2.0, 0.67),
-        2 => (1.5, 0.83),
-        3 => (1.17, 1.0),
-        4 => (1.0, 1.33),
-        5 => (0.83, 1.67),
-        _ => (0.67, 2.33),
+/// The blocks of one message in a conversation, drawn with [`MESSAGE`] sizes. The first and
+/// last block keep no outer margin, so the caller spaces messages itself. `id` must be unique
+/// among the messages on screen; `open` receives a clicked link's destination.
+pub fn message_blocks(blocks: &[Block], id: &str, open: LinkOpener) -> AnyElement {
+    let context = RenderContext {
+        metrics: &MESSAGE,
+        open,
+        list_depth: 0,
     };
-    (BODY_TEXT * size, BODY_TEXT * size * margin)
+    theme::column()
+        .text_size(theme::scaled(MESSAGE.text))
+        .line_height(theme::scaled(MESSAGE.line))
+        .children(render_blocks(blocks, id, &context, false))
+        .into_any_element()
 }
 
-/// A block's (top, bottom) margins in pixels at the base text size.
-fn margins(block: &Block) -> (f32, f32) {
-    match block {
-        Block::Heading(level, _) => {
-            let (_, margin) = heading_metrics(*level);
-            (margin, margin)
+impl Metrics {
+    /// A heading's text size and margin in pixels at the base text size.
+    fn heading(&self, level: u8) -> (f32, f32) {
+        let (size, margin) = self.headings[usize::from(level.clamp(1, 6)) - 1];
+        (self.text * size, self.text * size * margin)
+    }
+
+    /// A block's (top, bottom) margins in pixels at the base text size.
+    fn margins(&self, block: &Block) -> (f32, f32) {
+        match block {
+            Block::Heading(level, _) => {
+                let (_, margin) = self.heading(*level);
+                (margin, margin)
+            }
+            // A table has no margin of its own; its neighbours' margins separate it.
+            Block::Table(_) => (0., 0.),
+            // hr: 0.5em.
+            Block::Rule => (self.text / 2., self.text / 2.),
+            _ => (self.paragraph, self.paragraph),
         }
-        // A table has no margin of its own; its neighbours' margins separate it.
-        Block::Table(_) => (0., 0.),
-        // hr: 0.5em.
-        Block::Rule => (BODY_TEXT / 2., BODY_TEXT / 2.),
-        _ => (PARAGRAPH_MARGIN, PARAGRAPH_MARGIN),
     }
 }
 
@@ -170,7 +234,7 @@ fn margins(block: &Block) -> (f32, f32) {
 fn render_blocks(
     blocks: &[Block],
     id: &str,
-    context: &RenderContext<'_>,
+    context: &RenderContext,
     outermost: bool,
 ) -> Vec<AnyElement> {
     let in_list = context.list_depth > 0 && !outermost;
@@ -184,7 +248,7 @@ fn render_blocks(
                     // Tight list items show their text without paragraph or nested-list margins.
                     (0., 0.)
                 } else {
-                    margins(block)
+                    context.metrics.margins(block)
                 };
             let space_above = match previous_bottom {
                 Some(previous) => f32::max(previous, top),
@@ -204,17 +268,22 @@ fn render_blocks(
         .collect()
 }
 
-fn render_block(block: &Block, id: &str, context: &RenderContext<'_>) -> AnyElement {
+fn render_block(block: &Block, id: &str, context: &RenderContext) -> AnyElement {
     let colors = preview_colors();
+    let metrics = context.metrics;
     match block {
         Block::Heading(level, inline) => {
-            let (size, _) = heading_metrics(*level);
+            let (size, _) = metrics.heading(*level);
+            let document = metrics.document_headings;
             div()
                 .text_size(theme::scaled(size))
                 .line_height(relative(if *level == 1 { 1.2 } else { 1.25 }))
-                // VS Code draws h1–h3 at normal weight; h4–h6 keep the browser's bold.
-                .when(*level > 3, |heading| heading.font_weight(FontWeight::BOLD))
-                .when(*level == 1, |heading| {
+                // VS Code draws h1–h3 at normal weight; h4–h6 keep the browser's bold. In a
+                // message every heading is bold, since its size barely differs from the body.
+                .when(*level > 3 || !document, |heading| {
+                    heading.font_weight(FontWeight::BOLD)
+                })
+                .when(*level == 1 && document, |heading| {
                     heading
                         .pb(theme::scaled(size * 0.3))
                         .border_b_1()
@@ -229,13 +298,13 @@ fn render_block(block: &Block, id: &str, context: &RenderContext<'_>) -> AnyElem
         Block::Code { language, code } => div()
             .id(gpui::SharedString::from(format!("{id}-code")))
             .overflow_x_scroll()
-            .p(theme::scaled(CODE_PADDING))
+            .p(theme::scaled(metrics.code_padding))
             .rounded(theme::scaled(CODE_RADIUS))
             .bg(rgb(colors.code_block))
             .font_family(theme::code_font())
-            .text_size(theme::scaled(BODY_TEXT))
-            .line_height(theme::scaled(CODE_LINE))
-            .children(code_lines(language.as_deref(), code))
+            .text_size(theme::scaled(metrics.text))
+            .line_height(theme::scaled(metrics.code_line))
+            .children(code_lines(language.as_deref(), code, metrics.code_line))
             .into_any_element(),
         Block::Quote(blocks) => theme::column()
             // margin: 0 7px 0 5px; padding: 0 16px 0 10px; a 5 px bar on the left.
@@ -270,8 +339,8 @@ fn render_block(block: &Block, id: &str, context: &RenderContext<'_>) -> AnyElem
                             div()
                                 .flex()
                                 .flex_shrink_0()
-                                .w(theme::scaled(LIST_INDENT))
-                                .h(theme::scaled(BODY_LINE))
+                                .w(theme::scaled(metrics.list_indent))
+                                .h(theme::scaled(metrics.line))
                                 .items_center()
                                 .justify_end()
                                 .pr(theme::scaled(6.))
@@ -332,21 +401,52 @@ fn bullet(depth: usize) -> &'static str {
     }
 }
 
+/// One code block's tokens, line by line.
+type CodeTokens = std::rc::Rc<[Vec<(std::ops::Range<usize>, Token)>]>;
+
+/// How many code blocks keep their tokens between frames.
+const TOKEN_CACHE_BLOCKS: usize = 256;
+
+/// The tokens of `code` in `language`, worked out once per block rather than on every frame:
+/// a view repaints for each blink, scroll and streamed word, and a conversation can hold many
+/// code blocks.
+fn code_tokens(language: Option<&str>, lines: &[&str], code: &str) -> CodeTokens {
+    use std::hash::{Hash, Hasher};
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<u64, CodeTokens>> =
+            std::cell::RefCell::default();
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (language, code).hash(&mut hasher);
+    let key = hasher.finish();
+    CACHE.with_borrow_mut(|cache| {
+        if let Some(tokens) = cache.get(&key) {
+            return tokens.clone();
+        }
+        let tokens: CodeTokens = language
+            .and_then(Highlighter::for_language)
+            .map(|mut highlighter| {
+                highlighter
+                    .highlight(lines, usize::MAX)
+                    .into_iter()
+                    .map(<[_]>::to_vec)
+                    .collect()
+            })
+            .unwrap_or_default();
+        // Blocks no longer on screen are simply worked out again if they come back.
+        if cache.len() >= TOKEN_CACHE_BLOCKS {
+            cache.clear();
+        }
+        cache.insert(key, tokens.clone());
+        tokens
+    })
+}
+
 /// The code's lines, coloured by the fence's language like the editor colours files.
-fn code_lines(language: Option<&str>, code: &str) -> Vec<AnyElement> {
+fn code_lines(language: Option<&str>, code: &str, line_height: f32) -> Vec<AnyElement> {
     let colors = theme::colors();
     let lines: Vec<&str> = code.split('\n').collect();
-    let mut highlighter = language.and_then(Highlighter::for_language);
-    let tokens: Vec<Vec<(std::ops::Range<usize>, Token)>> = highlighter
-        .as_mut()
-        .map(|highlighter| {
-            highlighter
-                .highlight(&lines, usize::MAX)
-                .into_iter()
-                .map(<[_]>::to_vec)
-                .collect()
-        })
-        .unwrap_or_default();
+    let tokens = code_tokens(language, &lines, code);
     lines
         .iter()
         .enumerate()
@@ -367,7 +467,7 @@ fn code_lines(language: Option<&str>, code: &str) -> Vec<AnyElement> {
                 });
             div()
                 .whitespace_nowrap()
-                .min_h(theme::scaled(CODE_LINE))
+                .min_h(theme::scaled(line_height))
                 .child(StyledText::new((*line).to_owned()).with_highlights(highlights))
                 .into_any_element()
         })
@@ -398,7 +498,7 @@ fn highlight(marks: &[Mark]) -> HighlightStyle {
     style
 }
 
-fn render_inline(inline: &Inline, id: &str, context: &RenderContext<'_>) -> AnyElement {
+fn render_inline(inline: &Inline, id: &str, context: &RenderContext) -> AnyElement {
     let segments = inline.segments();
     let text = StyledText::new(inline.text.clone()).with_highlights(
         segments
@@ -419,15 +519,14 @@ fn render_inline(inline: &Inline, id: &str, context: &RenderContext<'_>) -> AnyE
     if links.is_empty() {
         return text.into_any_element();
     }
-    let file = context.file.to_path_buf();
-    let view = context.view.clone();
+    let open = context.open.clone();
     let ranges = links.iter().map(|(range, _)| range.clone()).collect();
     InteractiveText::new(gpui::SharedString::from(id.to_owned()), text)
         .on_click(ranges, move |index, _, cx| {
             let Some((_, destination)) = links.get(index) else {
                 return;
             };
-            open_link(&file, destination, &view, cx);
+            open(destination, cx);
         })
         .into_any_element()
 }
@@ -461,12 +560,58 @@ mod tests {
 
     #[test]
     fn unit_margins_follow_the_browser_defaults_vs_code_keeps() {
-        assert_eq!(heading_metrics(1), (28., 28. * 0.67));
-        assert_eq!(heading_metrics(2).0, 21.);
-        assert_eq!(margins(&Block::Rule), (7., 7.));
-        assert_eq!(margins(&Block::Table(Vec::new())), (0., 0.));
+        assert_eq!(PREVIEW.heading(1), (28., 28. * 0.67));
+        assert_eq!(PREVIEW.heading(2).0, 21.);
+        assert_eq!(PREVIEW.margins(&Block::Rule), (7., 7.));
+        assert_eq!(PREVIEW.margins(&Block::Table(Vec::new())), (0., 0.));
         assert_eq!(bullet(0), "•");
         assert_eq!(bullet(1), "◦");
         assert_eq!(bullet(5), "▪");
+    }
+
+    #[test]
+    fn unit_message_headings_stay_close_to_the_body_text() {
+        for level in 1..=6 {
+            let (size, margin) = MESSAGE.heading(level);
+            assert!(
+                size >= MESSAGE.text,
+                "h{level} is never smaller than the body"
+            );
+            assert!(
+                size <= MESSAGE.text * 1.3,
+                "h{level} stays a message heading"
+            );
+            assert!(
+                margin < PREVIEW.heading(level).1,
+                "h{level} is spaced tighter"
+            );
+        }
+        // Out-of-range levels are drawn as the nearest real one instead of panicking.
+        assert_eq!(MESSAGE.heading(0), MESSAGE.heading(1));
+        assert_eq!(MESSAGE.heading(9), MESSAGE.heading(6));
+        assert!(MESSAGE.margins(&Block::Rule).0 < PREVIEW.margins(&Block::Rule).0);
+    }
+
+    #[test]
+    fn unit_code_tokens_are_worked_out_once_per_block() {
+        let code = "fn main() {}\nlet x = 1;";
+        let lines: Vec<&str> = code.split('\n').collect();
+        let first = code_tokens(Some("rust"), &lines, code);
+        assert_eq!(first.len(), 2);
+        assert!(!first[0].is_empty(), "Rust code is coloured");
+        let again = code_tokens(Some("rust"), &lines, code);
+        assert!(
+            std::rc::Rc::ptr_eq(&first, &again),
+            "the second frame reuses the tokens"
+        );
+        // The same text under another language is a different block.
+        let plain = code_tokens(None, &lines, code);
+        assert!(plain.is_empty());
+        // Filling the cache drops old blocks without losing correctness.
+        for index in 0..=TOKEN_CACHE_BLOCKS {
+            let other = format!("let v{index} = {index};");
+            code_tokens(Some("rust"), &[other.as_str()], &other);
+        }
+        assert_eq!(code_tokens(Some("rust"), &lines, code)[..], first[..]);
     }
 }

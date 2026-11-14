@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 10:31:30.392689
-//+ Revised: 	2026/11/12 13:59:45.426105
+//+ Revised: 	2026/11/13 17:43:24.012921
 // -----------------------------------------------------------------------------
 
 //! Drop-down menus anchored under their button: the account menu and agent session options.
@@ -29,6 +29,7 @@ use gpui::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Menu {
     Account,
+    Editor,
     /// Choices for one option (such as the model) of the agent session at `session`.
     AgentOption {
         session: usize,
@@ -98,6 +99,15 @@ impl Workspace {
     pub fn menu_overlay(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let open = self.menu.as_ref()?;
         let (entries, corner, position, id) = match &open.menu {
+            Menu::Editor => (
+                self.editor_entries(cx),
+                Corner::TopRight,
+                point(
+                    px(open.anchor.x + open.anchor.width),
+                    px(open.anchor.y + open.anchor.height + 4.),
+                ),
+                "editor-menu".to_owned(),
+            ),
             Menu::Account => (
                 self.account_entries(),
                 Corner::BottomLeft,
@@ -252,6 +262,70 @@ impl Workspace {
 
     /// Like VS Code's accounts menu. Orin has no account service, so signing in is shown but
     /// unavailable; the agents' own sign-ins are listed below it.
+    fn editor_entries(&self, cx: &Context<Self>) -> Vec<Entry> {
+        let editor = self.editor.as_ref().map(|editor| editor.read(cx));
+        let editing = !self.previewing_markdown()
+            && self.settings.viewer_mode == crate::settings::ViewerMode::File;
+        [
+            (
+                "editor-save",
+                "Save",
+                "Ctrl+S",
+                editing && editor.is_some_and(|editor| editor.dirty() && !editor.saving),
+            ),
+            (
+                "editor-undo",
+                "Undo",
+                "Ctrl+Z",
+                editing && editor.is_some_and(|editor| editor.buffer().can_undo()),
+            ),
+            (
+                "editor-redo",
+                "Redo",
+                "Ctrl+Y",
+                editing && editor.is_some_and(|editor| editor.buffer().can_redo()),
+            ),
+            (
+                "editor-reload",
+                "Reload from disk",
+                "",
+                self.settings.selected_file.is_some()
+                    && !editor.is_some_and(|editor| editor.saving),
+            ),
+        ]
+        .into_iter()
+        .map(|(id, label, shortcut, enabled)| Entry::Item {
+            id: id.into(),
+            label: label.into(),
+            detail: (!shortcut.is_empty()).then(|| shortcut.into()),
+            checked: None,
+            dot: None,
+            enabled: enabled && !self.closing,
+            tooltip: None,
+            action: Box::new(move |view, window, cx| {
+                match id {
+                    "editor-save" => view.save_editor(cx),
+                    "editor-reload" => view.reload_editor(cx),
+                    _ => {
+                        if let Some(editor) = &view.editor {
+                            editor.update(cx, |editor, cx| {
+                                if id == "editor-undo" {
+                                    editor.undo(cx)
+                                } else {
+                                    editor.redo(cx)
+                                }
+                            });
+                        }
+                    }
+                }
+                if let Some(editor) = &view.editor {
+                    window.focus(&editor.read(cx).focus);
+                }
+            }),
+        })
+        .collect()
+    }
+
     fn account_entries(&self) -> Vec<Entry> {
         let colors = theme::colors();
         let profile = theme::row()

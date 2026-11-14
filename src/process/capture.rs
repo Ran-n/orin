@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 15:07:11.563383
-//+ Revised: 	2026/11/12 15:08:39.038356
+//+ Revised: 	2026/11/14 12:09:11.122966
 // -----------------------------------------------------------------------------
 
 //! Bounded command output and deadlines, with owned descendants stopped on every path.
@@ -61,6 +61,9 @@ pub(crate) fn output(command: &mut Command, timeout: Duration, limit: u64) -> Re
         check_size(&stdout, &stderr, limit)?;
         if let Some(status) = running.child.try_wait()? {
             running.reaped = true;
+            if let Some(tree) = &running.tree {
+                tree.leader_reaped();
+            }
             break status;
         }
         ensure!(

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 10:31:31.014652
-//+ Revised: 	2026/11/13 07:53:51.713168
+//+ Revised: 	2026/11/14 01:02:32.487721
 // -----------------------------------------------------------------------------
 
 //! The Welcome page, like VS Code's: ways to start, recent folders, and a few first steps.
@@ -10,7 +10,7 @@
 
 use super::{
     assets::{self, Icon},
-    controls::{ControlSpec, hint, icon, measured},
+    controls::{ControlSpec, Emphasis, hint, icon, measured},
     theme,
     workspace::Workspace,
 };
@@ -26,6 +26,10 @@ const GAP: f32 = 48.0;
 impl Workspace {
     pub fn show_welcome(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         self.close_menu(window, cx);
+        if self.project.is_some() {
+            self.close_project(cx);
+            return;
+        }
         if self.settings.page != Some(Page::Welcome) {
             self.settings.page = Some(Page::Welcome);
             self.changed(cx);
@@ -122,19 +126,33 @@ impl Workspace {
     }
 
     fn start_links(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        // Opening a folder is what this page is for, so it is the one prominent button; the
+        // other ways to start are quieter links below it.
+        let open = theme::row()
+            .gap_3()
+            .pb_1()
+            .child(
+                ControlSpec::new("welcome-open-folder", &self.controls, cx)
+                    .enabled(self.can_open_project(cx))
+                    .emphasis(Emphasis::Primary)
+                    .large()
+                    .tooltip(
+                        self.project_switch_blocked(cx)
+                            .unwrap_or("Choose a project folder"),
+                    )
+                    .icon_text(Icon::OpenFolder, "Open Folder…", |view, window, cx| {
+                        view.pick_project(window, cx)
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(theme::scaled(theme::SMALL_TEXT))
+                    .text_color(rgb(theme::colors().faint))
+                    .child("Ctrl+Shift+O"),
+            )
+            .into_any_element();
         let mut links = vec![
-            link(
-                Link {
-                    id: "welcome-open-folder",
-                    glyph: Icon::OpenFolder,
-                    label: "Open Folder…".into(),
-                    shortcut: Some("Ctrl+Shift+O"),
-                    enabled: self.can_open_project(cx),
-                },
-                &self.controls,
-                cx,
-                |view, window, cx| view.pick_project(window, cx),
-            ),
+            open,
             link(
                 Link {
                     id: "welcome-settings",
@@ -272,7 +290,7 @@ impl Workspace {
                 "welcome-step-layout",
                 Icon::ResetLayout,
                 "Arrange the columns",
-                "Drag titles to move Files, Code, Agents, and Terminal; drag dividers to resize.",
+                "Drag headers to move Files, Code, Agents, and Terminal; drag dividers to resize.",
                 SettingsSection::Layout,
             ),
         ];

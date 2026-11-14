@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:37.806031
-//+ Revised: 	2026/11/12 22:43:37.806031
+//+ Revised: 	2026/11/14 12:09:04.771742
 // -----------------------------------------------------------------------------
 
 //! Deciding, from the sources' answers, whether this copy of Orin has an update.
@@ -9,7 +9,7 @@
 use super::{
     release::{Asset, Release},
     source::ReleaseSource,
-    target::{asset_name, checksum_name},
+    target::{asset_name, checksum_name, signature_name},
 };
 use semver::Version;
 
@@ -19,13 +19,14 @@ pub enum UpdateStatus {
     /// Built from source: never checks, never installs.
     SourceBuild,
     UpToDate,
-    /// A newer release with a build for this system and its checksum.
+    /// A newer release with a build for this system, its checksum and its signature.
     Available {
         release: Release,
         asset: Asset,
         checksum: Asset,
+        signature: Asset,
     },
-    /// A newer release without a build (or its checksum) for this system.
+    /// A newer release without a build (or its checksum or signature) for this system.
     NoBuild(Version),
     /// A newer release the user chose to skip; it stays quiet until a newer one appears.
     Skipped(Version),
@@ -118,9 +119,10 @@ fn decide(
         return UpdateStatus::UpToDate;
     }
     let name = asset_name(&release.version, target);
-    let (Some(asset), Some(checksum)) = (
+    let (Some(asset), Some(checksum), Some(signature)) = (
         release.asset(&name).cloned(),
         release.asset(&checksum_name(&name)).cloned(),
+        release.asset(&signature_name(&name)).cloned(),
     ) else {
         return UpdateStatus::NoBuild(release.version);
     };
@@ -131,6 +133,7 @@ fn decide(
         release,
         asset,
         checksum,
+        signature,
     }
 }
 
@@ -162,6 +165,19 @@ mod tests {
     }
 
     fn release(version: &str, targets: &[&str], checksums: bool) -> Release {
+        let mut release = unsigned_release(version, targets, checksums);
+        let names: Vec<String> = targets
+            .iter()
+            .map(|target| asset_name(&release.version, target))
+            .collect();
+        release.assets.extend(names.into_iter().map(|name| Asset {
+            name: signature_name(&name),
+            url: format!("https://example.invalid/{name}.sig"),
+        }));
+        release
+    }
+
+    fn unsigned_release(version: &str, targets: &[&str], checksums: bool) -> Release {
         let version = Version::parse(version).unwrap();
         let mut assets = Vec::new();
         for target in targets {
@@ -220,13 +236,17 @@ mod tests {
         ))]);
         let status = check(&sources, &v("0.2.0"), Some(TARGET), None);
         let UpdateStatus::Available {
-            asset, checksum, ..
+            asset,
+            checksum,
+            signature,
+            ..
         } = &status
         else {
             panic!("{status:?}")
         };
         assert_eq!(asset.name, "orin-0.3.0-linux-x86_64");
         assert_eq!(checksum.name, "orin-0.3.0-linux-x86_64.b3");
+        assert_eq!(signature.name, "orin-0.3.0-linux-x86_64.sig");
         assert_eq!(
             status.message("14:02"),
             "Orin 0.3.0 is available (checked 14:02)."
@@ -252,6 +272,8 @@ mod tests {
         for answer in [
             release("0.3.0", &["windows-x86_64"], true),
             release("0.3.0", &[TARGET], false),
+            // A release nobody signed is never offered, however complete it looks.
+            unsigned_release("0.3.0", &[TARGET], true),
         ] {
             let (sources, _) = sources(vec![Ok(answer)]);
             let status = check(&sources, &v("0.2.0"), Some(TARGET), None);

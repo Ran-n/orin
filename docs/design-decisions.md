@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:34.382590 )
-[//]: # (+ Revised: 	2026/11/13 15:46:05.133611 )
+[//]: # (+ Revised: 	2026/11/14 21:46:04.917758 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -73,6 +73,8 @@ It is the only branding asset and stays at this stable, unversioned path.
 ### Consequences
 
 - The README and future application branding use this image unchanged.
+- The application and the Windows executable icon trim the image's transparent margin when they load it,
+  so the acorn fills the space it is given. The file itself is not edited.
 - New designs or variants require the owner's approval and replace this one rather than sitting beside it.
 
 ## ADR-004: Agent Integration Model
@@ -223,7 +225,7 @@ VS Code-like account menu as a placeholder (no server for real sign-in), and for
   highlighted by fence language, 5 px quote bars, row-ruled tables, and depth-dependent bullets.
 - **Look:** VS Code's "Modern" layout, which the owner showed from their own setup: a title bar with a centred
   command-center box; an activity bar on the left with one icon per column (marking shown columns, toggling them) and
-  the account and Settings buttons at the bottom; uppercase view titles; an editor tab with an accent line and a close
+  the account and Settings buttons at the bottom; compact toolbars without redundant Code/Agents titles; an editor tab with an accent line and a close
   button; Git decorations in Files (VS Code's letters and colours, read with `git status --porcelain=v1 -z` and
   `--ignored=matching`, ignored paths greyed, and refreshed by the file watcher, which also sees Git's index and HEAD;
   Git runs with `--no-optional-locks`, so reading status never rewrites the index and never wakes the watcher by
@@ -250,7 +252,9 @@ opt-out, asking GitHub first and GitLab when GitHub can't answer.
 ### Decision
 
 - **Releases:** pushing a `vX.Y.Z` tag builds one portable binary per target (`windows-x86_64`, `linux-x86_64`,
-  `macos-aarch64`) and attaches each with a BLAKE3 `.b3` file to a draft GitHub release. The names come from
+  `macos-aarch64`) and attaches each with a BLAKE3 `.b3` file to a draft GitHub release. Each build job records a provenance attestation for its files. The maintainer checks that
+  attestation, then signs every asset on their own machine with `orin-sign` and adds the `.sig` files; the signing
+  key lives in a password manager, is piped to `orin-sign`, and is never given to CI or a forge. The names come from
   `update::target::asset_name` (`orin-<version>-<target>`, `.exe` on Windows), printed for the workflow by
   `orin-asset-name`, so CI and the client can't drift apart. A tag that doesn't match `Cargo.toml` fails before building.
   Windows also ships an Inno Setup installer (`orin-<version>-windows-x86_64-setup.exe`) with its own `.b3`.
@@ -260,29 +264,45 @@ opt-out, asking GitHub first and GitLab when GitHub can't answer.
   checks or replaces itself, so `target/debug/orin` or a hand-made binary can't be overwritten.
 - **Check:** `releases/latest` from GitHub, then GitLab's `releases/permalink/latest` when GitHub fails (network,
   any non-200 such as a rate limit, or unparsable JSON); 10 s to connect, 30 s in total, HTTPS only, and only
-  `Accept` and `User-Agent: Orin/<version>` are sent. A release is offered when it is newer, has this target's binary and
-  `.b3`, and is not a pre-release (unless a pre-release is running; GitHub's `releases/latest` skips releases marked
+  `Accept` and `User-Agent: Orin/<version>` are sent. A release is offered when it is newer, has this target's binary,
+  `.b3` and `.sig`, and is not a pre-release (unless a pre-release is running; GitHub's `releases/latest` skips releases marked
   as pre-releases, so a pre-release build is mostly offered stable releases). The first automatic check runs 60 s after the
   window opens, then 24 h after the last successful one (1 h after a failure); a failed automatic check only updates
   Settings › Updates, while **Check now** also shows the error. Checks run on their own thread and are abandoned at quit.
-- **Install:** **Update and restart** streams the binary (at most 200 MiB, 60 s without data) into the cache's
+- **Signature:** a `.sig` is an Ed25519 signature (hex) over the statement `orin-release-v1`, the version, the asset
+  name and the asset's BLAKE3 hash, one per line. Two public keys are compiled into Orin (`update::signature::RELEASE_KEYS`) and either one's signature is accepted:
+  the first signs releases, the second is a backup kept apart, so a lost or stolen signing key can be replaced by a
+  release the backup signs.
+  Signing the version and name as well as the hash means a genuine older build, or another system's, can't be served
+  as the offered one. The signature is checked before the binary is fetched.
+- **Install:** **Update and restart** reads the `.b3`, refuses it unless the `.sig` proves the release key signed that
+  hash for this version and asset, streams the binary (at most 200 MiB, 60 s without data) into the cache's
   `updates/` folder while hashing it, compares the hash with the `.b3` before anything is replaced, swaps it in with
   `self-replace` (which moves a running `.exe` aside on Windows), then closes the way every quit does and starts the new
   binary with the same `--project` and `--settings` after the final settings save. A download stops after 30 minutes.
   When an agent is mid-turn the restart waits for **Restart now**. **Cancel** or quitting mid-download stops it and
   deletes the file; quitting waits up to 5 s for the download thread, so Orin never exits halfway through replacing
-  itself. Leftovers are deleted at the next start.
-- **Hosts:** asset URLs are not pinned to forge hosts. Integrity comes from the `.b3` fetched over HTTPS from the same
-  release, and the forges move downloads between hosts (`objects.githubusercontent.com`,
-  `release-assets.githubusercontent.com`), so a host list would break updates without adding a check the hash lacks.
+  itself. Leftovers are deleted at a later start, once they are older than any download can run (40 minutes), so a
+  second window never deletes the download another one is still making.
+- **Hosts:** asset URLs are not pinned to forge hosts. Authenticity comes from the signature and integrity from the
+  signed `.b3`, and the forges move downloads between hosts (`objects.githubusercontent.com`,
+  `release-assets.githubusercontent.com`), so a host list would break updates without adding a check the signature lacks.
 
 ### Consequences
 
-- Installers, code signing and notarisation stay open in area 9; there is no rollback yet.
-- GitLab must carry every asset and `.b3` of a release, because the check falls back to it; the `dbp` release flow
+- Operating-system code signing and notarisation stay open in area 9; there is no rollback yet.
+- Both release keys must be kept, in separate places: builds in the field only install what one of them signed.
+  Losing one is recoverable through the other; losing both means a manual download for everyone.
+- The attestation proves a file came from the release workflow at that tag. It does not prove the workflow itself
+  was honest: a compromised repository can still build a bad binary, which the maintainer would sign. Reproducible
+  builds checked locally would close that and are not in place.
+- The signature covers updates, not the first download from a release page, and does not stop a forge from
+  withholding a newer release. Operating-system code signing would cover the first; nothing here covers the second.
+- A release without its `.sig` files is not offered to anyone running a build that checks signatures.
+- GitLab must carry every asset, `.b3` and `.sig` of a release, because the check falls back to it; the `dbp` release flow
   attaches the GitHub assets to GitLab and Codeberg.
 - Orin's network use grows from `npx` alone to include the daily check, which can be turned off.
-- Debug builds accept `ORIN_RELEASE_TARGET`, `ORIN_UPDATE_SOURCES` and `ORIN_UPDATE_DIR` at run time, so rendered tests
+- Debug builds accept `ORIN_RELEASE_TARGET`, `ORIN_UPDATE_SOURCES`, `ORIN_UPDATE_KEY` and `ORIN_UPDATE_DIR` at run time, so rendered tests
   exercise the whole path against a local server; release builds ignore them.
 
 ## Implementation Status of Open Areas
@@ -299,4 +319,4 @@ The first implementation settled several areas in code. They can still be revisi
 | 6 | Privacy and connectivity | No telemetry; network use is `npx` fetching a missing adapter, and a daily update check against GitHub (GitLab if GitHub can't be reached), which you can turn off in Settings › Updates; neither sends any personal data | A written privacy policy for releases |
 | 7 | Platform support | Verified on Windows; CI builds and tests Windows, Linux, and macOS | Minimum OS versions, CPU architectures, graphics requirements |
 | 8 | Performance | — | Budgets for startup time, idle memory and CPU, and streaming output from several agents |
-| 9 | UI and distribution | English only; four themes; native rendered UI tests on Windows; Windows installer and portable release binaries with BLAKE3 checksums and in-app updates ([ADR-009](#adr-009-self-updating-portable-binaries)) | Linux and macOS rendered tests, other locales and themes, Linux/macOS installers, signing, and rollback |
+| 9 | UI and distribution | English only; four themes; native rendered UI tests on Windows; Windows installer and portable release binaries with BLAKE3 checksums, release-key signatures and in-app updates ([ADR-009](#adr-009-self-updating-portable-binaries)) | Linux and macOS rendered tests, other locales and themes, Linux/macOS installers, operating-system code signing, and rollback |

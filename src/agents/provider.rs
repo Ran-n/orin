@@ -1,11 +1,10 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:35:21.100281
-//+ Revised: 	2026/11/12 15:10:20.778565
+//+ Revised: 	2026/11/14 01:02:25.526131
 // -----------------------------------------------------------------------------
 
 use std::{
-    env,
     ffi::OsString,
     path::{Path, PathBuf},
     process::Command,
@@ -77,8 +76,17 @@ impl Provider {
         }
     }
 
+    /// The vendor's own installation guide for the agent's command-line tool.
+    pub fn setup_url(self) -> &'static str {
+        match self {
+            Self::Claude => "https://code.claude.com/docs/en/setup",
+            Self::Codex => "https://developers.openai.com/codex/cli/",
+            Self::Gemini => "https://geminicli.com/docs/get-started/installation/",
+        }
+    }
+
     pub fn probe(self) -> ProviderStatus {
-        self.probe_in(env::var_os("PATH").as_deref())
+        self.probe_in(launch::tool_path(&[], true).as_deref())
     }
 
     /// Find the adapter on `path`, or else `npx` to fetch it on first use.
@@ -120,15 +128,20 @@ impl Provider {
 
     /// The launch command, and whether it may first download the adapter.
     pub(super) fn command(self) -> Result<(Command, bool)> {
-        let status = self.probe();
+        self.command_in(launch::tool_path(&[], true).as_deref())
+    }
+
+    pub(super) fn command_in(self, path: Option<&std::ffi::OsStr>) -> Result<(Command, bool)> {
+        let status = self.probe_in(path);
         let executable = status
             .executable
             .context(status.error.unwrap_or_default())?;
         let args = self.arguments(status.package);
-        Ok((
-            launch::command(&executable, &args)?,
-            status.package.is_some(),
-        ))
+        let mut command = launch::command(&executable, &args)?;
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
+        Ok((command, status.package.is_some()))
     }
 
     /// Arguments for the adapter itself, or for `npx` running `package`.

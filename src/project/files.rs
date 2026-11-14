@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:12:36.486646
-//+ Revised: 	2026/11/13 07:53:51.908907
+//+ Revised: 	2026/11/14 01:02:33.466192
 // -----------------------------------------------------------------------------
 
 //! Bounded text reads and lazy directory enumeration.
@@ -70,6 +70,10 @@ impl Project {
             Ok(path) => path,
             Err(ProjectError::OutsideRoot) => {
                 tracing::warn!(target: "orin::project", "external symlink excluded from explorer");
+                return Ok(None);
+            }
+            Err(error) if vanished(&error) => {
+                tracing::debug!(target: "orin::project", "entry deleted while its folder was listed");
                 return Ok(None);
             }
             Err(error) => return Err(error),
@@ -154,9 +158,28 @@ fn decode_text(bytes: Vec<u8>) -> Result<String, ProjectError> {
     String::from_utf8(bytes).map_err(|_| ProjectError::Encoding)
 }
 
+/// True when `error` says the entry no longer exists. Builds delete temporary files all the
+/// time; one that goes between reading a folder and looking at the entry isn't a failure of
+/// the whole folder.
+fn vanished(error: &ProjectError) -> bool {
+    matches!(error, ProjectError::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_FILE_BYTES, ProjectError, decode_text};
+    use super::{MAX_FILE_BYTES, ProjectError, decode_text, vanished};
+
+    #[test]
+    fn regression_only_a_deleted_entry_is_skipped_while_listing() {
+        let io = |kind| ProjectError::Io {
+            path: "target/tmp".into(),
+            source: std::io::Error::from(kind),
+        };
+        assert!(vanished(&io(std::io::ErrorKind::NotFound)));
+        assert!(!vanished(&io(std::io::ErrorKind::PermissionDenied)));
+        assert!(!vanished(&ProjectError::OutsideRoot));
+        assert!(!vanished(&ProjectError::InvalidPath));
+    }
 
     #[test]
     fn accepts_empty_text() {

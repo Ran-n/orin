@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:37.274084
-//+ Revised: 	2026/11/12 23:40:35.983388
+//+ Revised: 	2026/11/14 12:09:03.055767
 // -----------------------------------------------------------------------------
 
 //! Self-updating: which build this is, finding newer releases, and installing them.
@@ -17,5 +17,6 @@ pub mod check;
 pub mod download;
 pub mod install;
 pub mod release;
+pub mod signature;
 pub mod source;
 pub mod target;

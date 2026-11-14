@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 18:02:55.287476
-//+ Revised: 	2026/11/12 10:31:43.718039
+//+ Revised: 	2026/11/14 01:02:35.358060
 // -----------------------------------------------------------------------------
 
 use super::*;
@@ -35,6 +35,9 @@ impl Fixture {
                 json!({"sessionUpdate":"config_option_update","configOptions":self.config_options()}),
             )?;
             return self.complete("end_turn");
+        }
+        if frame["params"]["prompt"][0]["text"] == "Report your progress." {
+            return self.report();
         }
         if frame["params"]["prompt"][0]["text"] == "hold" {
             return update(
@@ -70,6 +73,31 @@ impl Fixture {
         emit(request)
     }
 
+    /// A turn as real adapters stream it: a plan, some text, a tool call, a malformed update
+    /// (which must be skipped), then a Markdown reply and the plan again with more done.
+    fn report(&mut self) -> anyhow::Result<()> {
+        let plan = |first: &str, second: &str| {
+            json!({"sessionUpdate":"plan","entries":[
+                {"content":"Read the entry point","status":first},
+                {"content":"Update the greeting","status":second},
+                {"content":"Run the tests","status":"pending"}]})
+        };
+        update(plan("in_progress", "pending"))?;
+        update(
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Reading the entry point."}}),
+        )?;
+        let path = self.cwd.join("src/main.rs").to_string_lossy().into_owned();
+        update(
+            json!({"sessionUpdate":"tool_call","toolCallId":"read-1","title":"Read src/main.rs","kind":"read","status":"completed","locations":[{"path":path}]}),
+        )?;
+        update(json!({"sessionUpdate":"tool_call_update","status":"completed"}))?;
+        update(
+            json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":REPORT}}),
+        )?;
+        update(plan("completed", "in_progress"))?;
+        self.complete("end_turn")
+    }
+
     pub(super) fn permission_response(&mut self, frame: Value) -> anyhow::Result<()> {
         if frame["result"]["outcome"]["outcome"] == "cancelled" {
             return self.complete("cancelled");
@@ -88,3 +116,6 @@ impl Fixture {
         self.complete("end_turn")
     }
 }
+
+/// The Markdown reply of the progress report.
+const REPORT: &str = "## Summary\n\nThe entry point prints **one** greeting from `main`.\n\n- It builds with `cargo build`\n- Details are in [the readme](README.md)\n\n```rust\nfn main() {\n    println!(\"after\");\n}\n```\n";

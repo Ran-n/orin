@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:18:35.541331
-//+ Revised: 	2026/11/13 07:53:54.257339
+//+ Revised: 	2026/11/13 17:43:24.190905
 // -----------------------------------------------------------------------------
 
 use anyhow::{Context, Result, ensure};
@@ -59,7 +59,9 @@ pub fn assert_visible_controls(image: &RgbImage, state: &Value) -> Result<()> {
         id.strip_prefix("recent-")
             .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|byte| byte.is_ascii_digit()))
     };
-    let is_menu = |id: &str| id == "account-menu" || id.starts_with("agent-option-menu-");
+    let is_menu = |id: &str| {
+        id == "account-menu" || id == "editor-menu" || id.starts_with("agent-option-menu-")
+    };
     let is_container = |control: &Value| {
         control["id"].as_str().is_some_and(|id| {
             // File rows hold their Git badge.

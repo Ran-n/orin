@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:12:36.872262
-//+ Revised: 	2026/11/13 07:53:52.181729
+//+ Revised: 	2026/11/13 17:30:08.523896
 // -----------------------------------------------------------------------------
 
 //! Stable schema for workspace choices that survive restarts.
@@ -372,6 +372,8 @@ pub struct WorkspaceSettings {
     pub recent_projects: Vec<PathBuf>,
     /// Each agent's last chosen session options (model, effort, mode), by provider id and option id.
     pub agent_options: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tool_directories: Vec<PathBuf>,
     pub width: f32,
     pub height: f32,
     pub position: Option<(f32, f32)>,
@@ -396,6 +398,7 @@ impl Default for WorkspaceSettings {
             page: None,
             recent_projects: Vec::new(),
             agent_options: BTreeMap::new(),
+            tool_directories: Vec::new(),
             width: 1440.0,
             height: 860.0,
             position: None,
@@ -435,6 +438,11 @@ impl WorkspaceSettings {
         self.validate_recent()?;
         self.validate_agent_options()?;
         self.validate_updates()?;
+        if self.tool_directories.len() > 32
+            || self.tool_directories.iter().any(|path| !path.is_absolute())
+        {
+            return Err(SettingsError::Invalid("agent tool folders"));
+        }
         if self.editor_cursor > crate::project::MAX_FILE_BYTES {
             return Err(SettingsError::Invalid("editor cursor"));
         }

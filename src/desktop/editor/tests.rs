@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:50:02.412850
-//+ Revised: 	2026/11/13 07:53:53.161448
+//+ Revised: 	2026/11/14 12:09:14.480009
 // -----------------------------------------------------------------------------
 
 //! Headless native-widget contracts; OS pixels remain covered by rendered tests.
@@ -210,7 +210,8 @@ fn mouse_drag_uses_shaped_text_geometry_for_unicode_selection(cx: &mut TestAppCo
     cx.simulate_input("a🌱é");
     let (start, end) = update(&editor, cx, |view, _, _| {
         let bounds = view.bounds.unwrap();
-        let line = view.lines[0].shaped.as_ref().unwrap();
+        // A prompt's lines are wrapped; this short one is a single drawn row.
+        let line = &view.lines[0].wrapped.as_ref().unwrap().unwrapped_layout;
         let y = bounds.top() + px(20.);
         (
             point(bounds.left() + px(12.) + line.x_for_index(1), y),
@@ -335,5 +336,235 @@ fn unit_a_long_file_shapes_only_the_lines_on_screen(cx: &mut TestAppContext) {
             "the top of the file is on screen"
         );
         assert_eq!(view.lines[1].offset, "line 0\n".len());
+    });
+}
+
+#[gpui::test]
+fn prompt_wraps_long_lines_and_moves_and_clicks_by_drawn_row(cx: &mut TestAppContext) {
+    let (editor, cx) = prompt(cx);
+    // Far wider than any window: a prompt used to scroll sideways instead of wrapping.
+    let text = "intention ".repeat(80).trim_end().to_owned();
+    cx.simulate_input(&text);
+    cx.run_until_parked();
+    let rows = update(&editor, cx, |view, _, _| {
+        assert_eq!(view.lines.len(), 1, "still one line of text");
+        let line = &view.lines[0];
+        assert!(line.rows > 1, "the long line is drawn on several rows");
+        assert!(line.wrapped.is_some() && line.shaped.is_none());
+        assert_eq!(view.visual_rows, line.rows);
+        // The rows cover the line exactly, in order, with no gap or overlap.
+        let ranges = line.row_ranges();
+        assert_eq!(ranges.len(), line.rows);
+        assert_eq!(ranges.first().unwrap().start, 0);
+        assert_eq!(ranges.last().unwrap().end, text.len());
+        assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
+        assert_eq!(view.buffer().selection(), text.len()..text.len());
+        line.rows
+    });
+
+    // Up moves one drawn row within the same line, not to the start of the text.
+    cx.simulate_keystrokes("up");
+    let above = update(&editor, cx, |view, _, _| view.buffer().selection().end);
+    assert!(above > 0 && above < text.len(), "up landed at {above}");
+    cx.simulate_keystrokes("down");
+    let below = update(&editor, cx, |view, _, _| view.buffer().selection().end);
+    assert!(below > above, "down returned to a later row");
+    // On the first and last rows there is nowhere further to go.
+    for _ in 0..rows + 2 {
+        cx.simulate_keystrokes("up");
+    }
+    let top = update(&editor, cx, |view, _, _| {
+        let cursor = view.buffer().selection().end;
+        assert!(view.lines[0].row_ranges()[0].contains(&cursor) || cursor == 0);
+        cursor
+    });
+    cx.simulate_keystrokes("up");
+    assert_eq!(
+        update(&editor, cx, |view, _, _| view.buffer().selection().end),
+        top
+    );
+
+    // A click on the second drawn row lands in that row's text.
+    update(&editor, cx, |view, _, _| {
+        let second = view.lines[0].row_ranges()[1].clone();
+        let clicked = view.offset_at_row(1, px(1.)).unwrap();
+        assert!(
+            second.contains(&clicked) || clicked == second.start,
+            "{clicked} is outside {second:?}"
+        );
+        assert_eq!(view.offset_at_row(0, px(0.)), Some(0));
+        assert_eq!(view.offset_at_row(rows + 5, px(0.)), None, "below the text");
+    });
+
+    // A typed line break starts after the wrapped rows.
+    update(&editor, cx, |view, _, cx| {
+        let end = view.buffer().text().len();
+        view.select(end..end, cx);
+    });
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_input("next");
+    cx.run_until_parked();
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(view.lines.len(), 2);
+        assert_eq!(view.lines[1].row, view.lines[0].rows);
+        assert_eq!(view.visual_rows, view.lines[0].rows + 1);
+    });
+}
+
+#[gpui::test]
+fn home_and_end_move_within_the_drawn_row_of_a_wrapped_prompt(cx: &mut TestAppContext) {
+    let (editor, cx) = prompt(cx);
+    let text = "intention ".repeat(80).trim_end().to_owned();
+    cx.simulate_input(&text);
+    cx.run_until_parked();
+    let ranges = update(&editor, cx, |view, _, _| view.lines[0].row_ranges());
+    assert!(ranges.len() >= 3, "the text wraps onto several rows");
+    let caret = |editor: &Entity<TextEditor>, cx: &mut VisualTestContext| {
+        update(editor, cx, |view, _, _| {
+            let cursor = view.caret();
+            (cursor, view.drawn_row(cursor).map(|(row, _)| row))
+        })
+    };
+    let last = ranges.len() - 1;
+
+    // On the last row, Home goes to that row's start, not to the start of the whole line.
+    cx.simulate_keystrokes("home");
+    assert_eq!(caret(&editor, cx), (ranges[last].start, Some(last)));
+    // That offset is also where the row above ends; the caret is drawn on the row it was
+    // sent to, and Home again stays put.
+    cx.simulate_keystrokes("home");
+    assert_eq!(caret(&editor, cx), (ranges[last].start, Some(last)));
+    cx.simulate_keystrokes("end");
+    assert_eq!(caret(&editor, cx), (text.len(), Some(last)));
+
+    // A row in the middle: End stops at the end of that row, Home at its start.
+    cx.simulate_keystrokes("up");
+    let (_, row) = caret(&editor, cx);
+    assert_eq!(row, Some(last - 1));
+    cx.simulate_keystrokes("end");
+    assert_eq!(caret(&editor, cx), (ranges[last - 1].end, Some(last - 1)));
+    cx.simulate_keystrokes("home");
+    assert_eq!(caret(&editor, cx), (ranges[last - 1].start, Some(last - 1)));
+    // From a row's start, Down lands on the start of the next row, not the end of this one.
+    cx.simulate_keystrokes("down");
+    assert_eq!(caret(&editor, cx), (ranges[last].start, Some(last)));
+
+    // Shift+Home selects back to the start of the row only.
+    cx.simulate_keystrokes("end shift-home");
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(view.buffer().selection(), ranges[last].start..text.len());
+    });
+
+    // Typing ends the row-start placement: the caret follows the text again.
+    cx.simulate_keystrokes("home");
+    cx.simulate_input("x");
+    update(&editor, cx, |view, _, _| assert!(!view.row_start));
+
+    // The first row's Home is the start of the text.
+    for _ in 0..ranges.len() {
+        cx.simulate_keystrokes("up");
+    }
+    cx.simulate_keystrokes("home");
+    assert_eq!(caret(&editor, cx), (0, Some(0)));
+}
+
+#[gpui::test]
+fn a_file_keeps_home_and_end_on_its_lines(cx: &mut TestAppContext) {
+    let (_directory, _project, editor, cx) = file_editor(cx, "first line\r\nsecond\n");
+    update(&editor, cx, |view, _, cx| view.select(3..3, cx));
+    cx.simulate_keystrokes("end");
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(view.caret(), "first line".len(), "before the CR");
+        assert_eq!(view.drawn_row(view.caret()), None, "files aren't wrapped");
+    });
+    cx.simulate_keystrokes("home");
+    update(&editor, cx, |view, _, _| assert_eq!(view.caret(), 0));
+}
+
+#[gpui::test]
+fn the_view_scrolls_to_keep_the_caret_in_sight(cx: &mut TestAppContext) {
+    let (editor, cx) = prompt(cx);
+    // Far more rows than any window is tall.
+    update(&editor, cx, |view, _, cx| {
+        view.replace(0..0, &"row\n".repeat(400), cx);
+    });
+    cx.run_until_parked();
+    let line = super::paint::Geometry::current(false).line;
+    let (viewport, scrolled) = update(&editor, cx, |view, _, _| {
+        assert_eq!(view.caret(), view.buffer().text().len());
+        (
+            f32::from(view.scroll.bounds().size.height),
+            -f32::from(view.scroll.offset().y),
+        )
+    });
+    assert!(
+        viewport > 0. && viewport < 400. * line,
+        "the text overflows"
+    );
+    // The caret is on the last row (401, empty); typing there used to happen out of sight.
+    let caret_top = 400. * line;
+    assert!(
+        scrolled > 0. && caret_top >= scrolled && caret_top + line <= scrolled + viewport,
+        "row at {caret_top} is outside {scrolled}..{}",
+        scrolled + viewport
+    );
+
+    // Moving the caret back to the start brings the start back.
+    update(&editor, cx, |view, _, cx| view.select(0..0, cx));
+    cx.run_until_parked();
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(f32::from(view.scroll.offset().y), 0.);
+    });
+
+    // With the caret still, scrolling elsewhere is left alone.
+    update(&editor, cx, |view, _, cx| {
+        view.scroll.set_offset(point(px(0.), px(-10. * line)));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(f32::from(view.scroll.offset().y), -10. * line);
+    });
+    // The next key brings the caret back into view.
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(f32::from(view.scroll.offset().y), 0.);
+    });
+}
+
+#[gpui::test]
+fn a_file_scrolls_sideways_to_a_caret_past_its_edge(cx: &mut TestAppContext) {
+    let long = "let value = 1; ".repeat(400);
+    let (_directory, _project, editor, cx) = file_editor(cx, &long);
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(f32::from(view.scroll.offset().x), 0.);
+    });
+    cx.simulate_keystrokes("end");
+    cx.run_until_parked();
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(view.caret(), long.len());
+        assert!(
+            f32::from(view.scroll.offset().x) < 0.,
+            "the end of the long line is brought into view"
+        );
+    });
+    cx.simulate_keystrokes("home");
+    cx.run_until_parked();
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(f32::from(view.scroll.offset().x), 0.);
+    });
+}
+
+#[gpui::test]
+fn files_are_never_wrapped(cx: &mut TestAppContext) {
+    let long = "let value = 1; ".repeat(200);
+    let (_directory, _project, editor, cx) = file_editor(cx, &long);
+    update(&editor, cx, |view, _, _| {
+        assert_eq!(view.lines.len(), 1);
+        assert_eq!(view.lines[0].rows, 1, "a file's long line scrolls sideways");
+        assert!(view.lines[0].wrapped.is_none());
+        assert_eq!(view.lines[0].row_ranges(), vec![0..long.len()]);
+        assert_eq!(view.row_above_or_below(10, true), None);
     });
 }

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:39:09.953498
-//+ Revised: 	2026/11/13 07:53:53.098771
+//+ Revised: 	2026/11/14 12:09:14.185196
 // -----------------------------------------------------------------------------
 
 //! Text navigation, clipboard, history, and explicit save/submit actions.
@@ -20,31 +20,39 @@ impl TextEditor {
         }
         let selection = self.buffer().selection();
         let text = self.buffer().text();
-        let cursor = if self.selection_reversed {
-            selection.start
-        } else {
-            selection.end
-        };
+        let cursor = self.caret();
         if matches!(key, "left" | "right" | "home" | "end" | "up" | "down") {
+            // A wrapped prompt moves by the rows as drawn; a file by its lines.
+            let drawn = self.drawn_row(cursor);
+            // The drawn row the caret was sent to, when the key names one.
+            let mut target = None;
             let position = match key {
                 "left" if !modifiers.shift && !selection.is_empty() => selection.start,
                 "right" if !modifiers.shift && !selection.is_empty() => selection.end,
                 "left" => previous(text, cursor),
                 "right" => next(text, cursor),
-                "home" => text[..cursor].rfind('\n').map_or(0, |index| index + 1),
-                "end" => {
-                    let end = text[cursor..]
-                        .find('\n')
-                        .map_or(text.len(), |index| cursor + index);
-                    if end > 0 && text.as_bytes()[end - 1] == b'\r' {
-                        end - 1
-                    } else {
-                        end
+                "home" => match &drawn {
+                    Some((row, range)) => {
+                        target = Some(*row);
+                        range.start
                     }
-                }
-                _ => vertical(text, cursor, key == "down"),
+                    None => text[..cursor].rfind('\n').map_or(0, |index| index + 1),
+                },
+                "end" => match &drawn {
+                    Some((_, range)) => range.end,
+                    None => line_end(text, cursor),
+                },
+                _ => match self.row_above_or_below(cursor, key == "down") {
+                    Some((offset, row)) => {
+                        target = Some(row);
+                        offset
+                    }
+                    None => vertical(text, cursor, key == "down"),
+                },
             };
             self.move_cursor(position, modifiers.shift, cx);
+            // Set after the move, which clears it: the caret belongs to the row it was sent to.
+            self.row_start = target.is_some_and(|row| self.starts_row(position, row));
             cx.stop_propagation();
             return;
         }
@@ -115,10 +123,12 @@ impl TextEditor {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus);
-        let position = self.offset_at(event.position);
+        let (position, row) = self.place_at(event.position);
         self.anchor = position;
         self.dragging = true;
         self.select(position..position, cx);
+        // A click at the left edge of a wrapped row puts the caret on that row.
+        self.row_start = self.starts_row(position, row);
     }
     pub fn mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.dragging {
@@ -126,6 +136,18 @@ impl TextEditor {
             self.select(self.anchor.min(position)..self.anchor.max(position), cx);
             self.selection_reversed = position < self.anchor;
         }
+    }
+}
+
+/// The end of the line of text holding `cursor`, before its line break (and the CR of a CRLF).
+fn line_end(text: &str, cursor: usize) -> usize {
+    let end = text[cursor..]
+        .find('\n')
+        .map_or(text.len(), |index| cursor + index);
+    if end > 0 && text.as_bytes()[end - 1] == b'\r' {
+        end - 1
+    } else {
+        end
     }
 }
 

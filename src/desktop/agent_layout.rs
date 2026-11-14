@@ -1,54 +1,35 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
-//+ Created: 	2026/11/11 17:43:35.532192
-//+ Revised: 	2026/11/12 09:16:20.697816
+//+ Created: 	2026/11/11 15:18:28.471221
+//+ Revised: 	2026/11/14 01:02:27.327260
 // -----------------------------------------------------------------------------
 
-//! Conversations, explicit approval choices, and per-agent activity.
+//! One agent's conversation: what was said and done in the order it happened, the decisions
+//! the agent is waiting on, and the message box.
 
 use super::{
+    agent_details::tool_row,
     agent_view::{AgentAction, AgentView, status_color, status_label},
     assets::Icon,
-    controls::{ControlSpec, Emphasis, button, icon},
+    controls::{ControlSpec, Emphasis, agent_color, agent_icon, icon},
+    markdown::{self, LinkTarget},
+    markdown_view::{LinkOpener, message_blocks},
     theme,
 };
 use crate::agents::{AgentStatus, MessageRole};
 use gpui::{AnyElement, Context, Window, div, prelude::*, rgb};
+use std::path::Path;
+
+/// The message box grows with its text between these heights, then scrolls.
+const COMPOSER_MIN_HEIGHT: f32 = 52.0;
+const COMPOSER_MAX_LINES: f32 = 10.0;
 
 impl Render for AgentView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let status = self.snapshot.status;
-        let can_send = status == AgentStatus::Ready
-            && !self.composer.read(cx).buffer().text().trim().is_empty();
         theme::column()
             .size_full()
-            .child(
-                theme::row()
-                    .h(theme::scaled(28.))
-                    .flex_shrink_0()
-                    .px_3()
-                    .gap_2()
-                    .text_size(theme::scaled(theme::SMALL_TEXT))
-                    .child(
-                        div()
-                            .size(theme::scaled(7.))
-                            .rounded_full()
-                            .bg(rgb(status_color(status))),
-                    )
-                    .child(
-                        div()
-                            .text_color(rgb(theme::colors().muted))
-                            .child(status_label(status)),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        ControlSpec::new("agent-cancel", &self.controls, cx)
-                            .enabled(self.snapshot.is_busy())
-                            .tooltip("Cancel this turn")
-                            .icon_text(Icon::Stop, "Cancel", |view, _, cx| view.cancel(cx)),
-                    ),
-            )
             .child(self.conversation(cx))
+            .children(self.plan_panel())
             // Decisions the agent is waiting on stay pinned in view, never scrolled away.
             .when(!self.authentication(cx).is_empty(), |view| {
                 view.child(
@@ -69,216 +50,254 @@ impl Render for AgentView {
                     .map(|message| {
                         theme::row()
                             .flex_shrink_0()
+                            .items_start()
                             .mx_3()
                             .mb_2()
+                            .px_2()
+                            .py_1()
                             .gap_2()
+                            .rounded(theme::scaled(theme::RADIUS))
+                            .bg(rgb(theme::colors().error_surface))
                             .text_size(theme::scaled(theme::SMALL_TEXT))
                             .text_color(rgb(theme::colors().error))
-                            .child(icon(Icon::Error, theme::colors().error))
-                            .child(div().flex_1().whitespace_normal().child(message))
+                            .child(
+                                div()
+                                    .pt(theme::scaled(2.))
+                                    .child(icon(Icon::Error, theme::colors().error)),
+                            )
+                            .child(div().flex_1().min_w_0().whitespace_normal().child(message))
                     }),
             )
-            .child(
-                theme::column()
-                    .flex_shrink_0()
-                    .m_3()
-                    .mt_0()
-                    .rounded(theme::scaled(6.))
-                    .border_1()
-                    .border_color(rgb(theme::colors().border))
-                    .bg(rgb(theme::colors().panel))
-                    .child(div().h(theme::scaled(64.)).child(self.composer.clone()))
-                    .child(
-                        theme::row()
-                            .px_2()
-                            .pb_2()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .text_size(theme::scaled(theme::TINY_TEXT))
-                                    .text_color(rgb(theme::colors().faint))
-                                    .child("Enter to send · Shift+Enter for a new line"),
-                            )
-                            .child(
-                                ControlSpec::new("agent-send", &self.controls, cx)
-                                    .enabled(can_send)
-                                    .emphasis(Emphasis::Primary)
-                                    .tooltip("Send (Enter)")
-                                    .icon(Icon::Send, |view, _, cx| view.send_prompt(cx)),
-                            ),
-                    ),
-            )
+            .child(self.composer_box(cx))
     }
 }
+
 impl AgentView {
-    fn conversation(&self, cx: &Context<Self>) -> AnyElement {
-        let messages = self.snapshot.messages.iter().map(|message| {
-            let (label, color) = match message.role {
-                MessageRole::User => ("You", theme::colors().walnut),
-                MessageRole::Agent => (self.snapshot.provider.label(), theme::colors().accent),
-                MessageRole::Thought => ("Reasoning", theme::colors().muted),
-            };
-            theme::column()
-                .flex_shrink_0()
-                .gap_1()
-                .py_2()
+    /// The message box: the draft, then what the agent is doing beside the one action that fits
+    /// it. Send while the agent can take an instruction, Stop while it is working.
+    fn composer_box(&self, cx: &Context<Self>) -> AnyElement {
+        let status = self.snapshot.status;
+        let draft = self.composer.read(cx).buffer().text();
+        let can_send = status == AgentStatus::Ready && !draft.trim().is_empty();
+        // Drawn rows, so a long line that wraps grows the box like a typed line break does.
+        let lines = (self.composer.read(cx).visual_rows.max(1) as f32).min(COMPOSER_MAX_LINES);
+        let height = (lines * theme::CODE_LINE + 2. * theme::CODE_PADDING).max(COMPOSER_MIN_HEIGHT);
+        let footer = if status == AgentStatus::Ready {
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_size(theme::scaled(theme::TINY_TEXT))
+                .text_color(rgb(theme::colors().faint))
+                .child("Enter to send · Shift+Enter for a new line")
+        } else {
+            theme::row()
+                .flex_1()
+                .gap_2()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_size(theme::scaled(theme::SMALL_TEXT))
+                .text_color(rgb(theme::colors().soft_text))
                 .child(
                     div()
-                        .text_size(theme::scaled(theme::TINY_TEXT))
-                        .text_color(rgb(color))
-                        .child(label),
+                        .size(theme::scaled(7.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(rgb(status_color(status))),
                 )
-                .child(
-                    div()
-                        .whitespace_normal()
-                        .text_color(rgb(if message.role == MessageRole::Thought {
-                            theme::colors().muted
-                        } else {
-                            theme::colors().text
-                        }))
-                        .child(message.text.clone()),
-                )
-        });
-        let tools = self
-            .snapshot
-            .tool_calls
-            .iter()
-            .rev()
-            .take(4)
-            .rev()
-            .map(|tool| {
+                .child(status_label(status))
+        };
+        let action = if self.snapshot.is_busy() {
+            ControlSpec::new("agent-cancel", &self.controls, cx)
+                .tooltip("Stop this turn")
+                .icon_text(Icon::Stop, "Stop", |view, _, cx| view.cancel(cx))
+        } else {
+            ControlSpec::new("agent-send", &self.controls, cx)
+                .enabled(can_send)
+                .emphasis(Emphasis::Primary)
+                .tooltip("Send (Enter)")
+                .icon(Icon::Send, |view, _, cx| view.send_prompt(cx))
+        };
+        theme::column()
+            .flex_shrink_0()
+            .m_3()
+            .mt_0()
+            .rounded(theme::scaled(8.))
+            .border_1()
+            .border_color(rgb(theme::colors().border))
+            .bg(rgb(theme::colors().panel))
+            .overflow_hidden()
+            .child(div().h(theme::scaled(height)).child(self.composer.clone()))
+            .child(
                 theme::row()
-                    .flex_shrink_0()
+                    .px_2()
+                    .pb_2()
                     .gap_2()
-                    .py_1()
-                    .text_xs()
-                    .child(
-                        div()
-                            .text_color(rgb(theme::colors().muted))
-                            .child(tool_label(&tool.status)),
-                    )
-                    .child(tool.title.clone())
-            });
-        theme::column().id("conversation-scroll").flex_1().px_3().overflow_y_scroll().track_scroll(&self.scroll)
-            .children(messages).children(tools)
-            .when(!self.snapshot.changed_files.is_empty(), |view| {
-                view.child(theme::row().flex_wrap().flex_shrink_0().gap_2().py_1().children(self.changed_files(cx)))
-            })
-            .when(self.snapshot.messages.is_empty(),|view|view.child(div().py_2().text_size(theme::scaled(theme::SMALL_TEXT)).text_color(rgb(theme::colors().muted)).child("Give this agent a task. Its progress, questions, and tool activity will appear here.")))
+                    .child(footer)
+                    .child(action),
+            )
             .into_any_element()
     }
-    fn permission_panels(&self, cx: &Context<Self>) -> Vec<AnyElement> {
-        self.snapshot
-            .pending_permissions
-            .iter()
-            .map(|request| {
-                let mut choices = Vec::new();
-                for option in &request.options {
-                    let request_id = request.request_id.clone();
-                    let option_id = option.option_id.clone();
-                    choices.push(button(
-                        format!("permission-{}-{}", request_id, option_id),
-                        option.name.clone(),
-                        true,
-                        false,
-                        &self.controls,
-                        cx,
-                        move |view, _, cx| view.permission(&request_id, Some(&option_id), cx),
-                    ));
+
+    /// Messages and tool calls in the order they happened, then the files the agent changed.
+    fn conversation(&self, cx: &Context<Self>) -> AnyElement {
+        let colors = theme::colors();
+        let messages = &self.snapshot.messages;
+        let mut tools = self.snapshot.tool_calls.iter().peekable();
+        let mut items: Vec<AnyElement> = Vec::new();
+        // The agent's name heads each of its turns once, not every paragraph of it.
+        let mut named = false;
+        let name = |items: &mut Vec<AnyElement>, named: &mut bool| {
+            if !*named {
+                items.push(self.agent_name());
+                *named = true;
+            }
+        };
+        for index in 0..=messages.len() {
+            let last = index == messages.len();
+            let mut calls = Vec::new();
+            while let Some(tool) = tools.next_if(|tool| last || tool.after_message <= index) {
+                calls.push(tool_row(tool));
+            }
+            if !calls.is_empty() {
+                name(&mut items, &mut named);
+                items.push(
+                    theme::column()
+                        .flex_shrink_0()
+                        .gap(theme::scaled(2.))
+                        .pl_2()
+                        .border_l_2()
+                        .border_color(rgb(colors.border))
+                        .children(calls)
+                        .into_any_element(),
+                );
+            }
+            let Some(message) = messages.get(index) else {
+                continue;
+            };
+            match message.role {
+                MessageRole::User => {
+                    named = false;
+                    items.push(
+                        div()
+                            .flex_shrink_0()
+                            .ml(theme::scaled(28.))
+                            .mt_1()
+                            .px_3()
+                            .py_2()
+                            .rounded(theme::scaled(8.))
+                            // The border keeps the bubble apart from the ground in the light
+                            // themes, where the raised surface is close to it.
+                            .border_1()
+                            .border_color(rgb(colors.border))
+                            .bg(rgb(colors.raised))
+                            .whitespace_normal()
+                            .child(message.text.clone())
+                            .into_any_element(),
+                    );
                 }
-                let request_id = request.request_id.clone();
-                choices.push(button(
-                    format!("permission-cancel-{request_id}"),
-                    "Decline",
-                    true,
-                    false,
-                    &self.controls,
-                    cx,
-                    move |view, _, cx| view.permission(&request_id, None, cx),
-                ));
-                theme::column()
-                    .id(gpui::SharedString::from(format!(
-                        "permission-{}",
-                        request.request_id
-                    )))
-                    .flex_shrink_0()
-                    .max_h(theme::scaled(180.))
-                    .overflow_y_scroll()
-                    .mx_3()
-                    .mb_2()
-                    .p_2()
-                    .gap_2()
-                    .border_1()
-                    .border_color(rgb(theme::colors().warning))
-                    .rounded(theme::scaled(6.))
-                    .bg(rgb(theme::colors().panel))
-                    .child(
-                        theme::row()
-                            .gap_2()
-                            .child(icon(Icon::Error, theme::colors().warning))
+                MessageRole::Agent => {
+                    name(&mut items, &mut named);
+                    let blocks = self.replies.get(index).cloned().unwrap_or_default();
+                    items.push(
+                        div()
+                            .flex_shrink_0()
+                            .child(message_blocks(
+                                &blocks,
+                                &format!("reply-{index}"),
+                                self.link_opener(cx),
+                            ))
+                            .into_any_element(),
+                    );
+                }
+                MessageRole::Thought => {
+                    name(&mut items, &mut named);
+                    items.push(
+                        theme::column()
+                            .flex_shrink_0()
+                            .gap(theme::scaled(2.))
+                            .pl_2()
+                            .border_l_2()
+                            .border_color(rgb(colors.border))
+                            .text_size(theme::scaled(theme::SMALL_TEXT))
                             .child(
                                 div()
-                                    .flex_1()
+                                    .text_size(theme::scaled(theme::TINY_TEXT))
+                                    .text_color(rgb(colors.faint))
+                                    .child("Reasoning"),
+                            )
+                            .child(
+                                div()
                                     .whitespace_normal()
-                                    .child(request.title.clone()),
-                            ),
-                    )
-                    .child(theme::row().flex_wrap().gap_2().children(choices))
-                    .into_any_element()
-            })
-            .collect()
-    }
-    fn authentication(&self, cx: &Context<Self>) -> Vec<AnyElement> {
-        if self.snapshot.status != AgentStatus::AuthRequired {
-            return vec![];
+                                    .italic()
+                                    .text_color(rgb(colors.muted))
+                                    .child(message.text.trim().to_owned()),
+                            )
+                            .into_any_element(),
+                    );
+                }
+            }
         }
-        self.snapshot
-            .auth_methods
-            .iter()
-            .map(|method| {
-                let id = method.id.clone();
-                button(
-                    format!("authenticate-{id}"),
-                    method.name.clone(),
-                    true,
-                    false,
-                    &self.controls,
-                    cx,
-                    move |view, _, cx| view.authenticate(&id, cx),
+        theme::column()
+            .id("conversation-scroll")
+            .flex_1()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .when(messages.is_empty() && items.is_empty(), |view| {
+                view.child(
+                    div()
+                        .text_size(theme::scaled(theme::SMALL_TEXT))
+                        .text_color(rgb(colors.muted))
+                        .whitespace_normal()
+                        .child(if self.snapshot.status == AgentStatus::Starting {
+                            "Starting the agent. The first start can take a minute while its \
+                             adapter is fetched."
+                        } else {
+                            "Give this agent a task. Its progress, questions, and tool activity \
+                             will appear here."
+                        }),
                 )
             })
-            .collect()
+            .children(items)
+            .children(self.changed_files(cx))
+            .into_any_element()
     }
-    fn changed_files(&self, cx: &Context<Self>) -> Vec<AnyElement> {
-        self.snapshot
-            .changed_files
-            .iter()
-            .take(8)
-            .map(|path| {
-                let path = path.clone();
-                button(
-                    format!("changed-file-{}", path.display()),
-                    format!(
-                        "Review {}",
-                        path.file_name().unwrap_or_default().to_string_lossy()
-                    ),
-                    true,
-                    false,
-                    &self.controls,
-                    cx,
-                    move |_, _, cx| cx.emit(AgentAction::OpenFile(path.clone())),
-                )
-            })
-            .collect()
+
+    /// The agent's logo and name, heading a turn.
+    fn agent_name(&self) -> AnyElement {
+        let provider = self.snapshot.provider;
+        theme::row()
+            .flex_shrink_0()
+            .gap_2()
+            .mt_1()
+            .text_size(theme::scaled(theme::TINY_TEXT))
+            .text_color(rgb(theme::colors().muted))
+            .child(icon(agent_icon(provider), agent_color(provider)))
+            .child(provider.label())
+            .into_any_element()
     }
-}
-fn tool_label(status: &str) -> &'static str {
-    match status {
-        "completed" => "Done",
-        "failed" => "Failed",
-        "in_progress" => "Running",
-        "pending" => "Pending",
-        _ => "Activity",
+
+    /// What a link in a reply does: web links open in the browser, project files in Code.
+    fn link_opener(&self, cx: &Context<Self>) -> LinkOpener {
+        let view = cx.weak_entity();
+        std::rc::Rc::new(move |destination, cx| {
+            match markdown::link_target(Path::new(""), destination) {
+                LinkTarget::External(url) => cx.open_url(&url),
+                LinkTarget::File(path) => {
+                    if let Err(error) =
+                        view.update(cx, |_, cx| cx.emit(AgentAction::OpenProjectFile(path)))
+                    {
+                        tracing::warn!(target: "orin::agents", %error, "link clicked after the session closed");
+                    }
+                }
+                LinkTarget::None => {
+                    tracing::debug!(target: "orin::agents", destination, "link has nothing to open");
+                }
+            }
+        })
     }
 }

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:27:01.254950
-//+ Revised: 	2026/11/13 07:53:51.365472
+//+ Revised: 	2026/11/13 17:30:08.374824
 // -----------------------------------------------------------------------------
 
 //! Presentation state and event delivery for one native workspace window.
@@ -146,6 +146,9 @@ impl Workspace {
         super::theme::apply(&settings.appearance);
         let (sender, receiver) = mpsc::channel();
         let project = options.project.clone().or_else(|| settings.project.clone());
+        let mut account_environment = Environment::current();
+        account_environment.path =
+            crate::process::launch::tool_path(&settings.tool_directories, !options.test_driver);
         let mut workspace = Self {
             settings,
             store,
@@ -187,7 +190,7 @@ impl Workspace {
             font_names: None,
             accounts: None,
             accounts_checking: false,
-            account_environment: Environment::current(),
+            account_environment,
             shell_input: None,
             shell_focus: true,
             menu: None,

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:45:42.007815
-//+ Revised: 	2026/11/12 13:59:49.487104
+//+ Revised: 	2026/11/14 22:00:10.813954
 // -----------------------------------------------------------------------------
 
 use std::fs;
@@ -15,17 +15,42 @@ pub fn run() -> Result<()> {
     for (width, height) in [(1280, 800), (1000, 680)] {
         let mut app = AppDriver::start_with_agent()?;
         app.resize(width, height)?;
-        app.click("agent-claude")?;
-        app.wait_for("offline ACP fixture ready", |state| {
+        // The empty column's own launch button starts the agent, like the one in the header.
+        let state = app.wait_for("agent launchers", |state| has(state, "start-claude"))?;
+        ensure!(
+            enabled(&state, "start-claude") == Some(true),
+            "the installed agent's launch button is disabled"
+        );
+        ensure!(
+            !has(&state, "agent-send") && !has(&state, "agent-cancel"),
+            "there is no message box before a session starts"
+        );
+        app.click("start-claude")?;
+        let state = app.wait_for("offline ACP fixture ready", |state| {
             session(state).is_some_and(|agent| agent["status"] == "Ready")
+                && has(state, "agent-send")
         })?;
+        ensure!(
+            !has(&state, "start-claude"),
+            "the launchers leave once a session is open"
+        );
+        // An idle agent offers Send (disabled until there is text) and nothing to stop.
+        ensure!(
+            enabled(&state, "agent-send") == Some(false) && !has(&state, "agent-cancel"),
+            "an idle agent shows a disabled Send and no Stop"
+        );
         let original = fs::read_to_string(app.fixture_file("src/main.rs"))?;
         prompt(&mut app, "Please update the main program.")?;
-        let state = wait_permission(&mut app)?;
+        wait_permission(&mut app)?;
         ensure!(
             fs::read_to_string(app.fixture_file("src/main.rs"))? == original,
             "agent wrote before explicit approval"
         );
+        // While the agent waits, the one action beside the message box is Stop. Controls are
+        // reported from the last painted frame, which can trail the session status.
+        let state = app.wait_for("a busy agent shows Stop in place of Send", |state| {
+            enabled(state, "agent-cancel") == Some(true) && !has(state, "agent-send")
+        })?;
         capture(&mut app, &state, &format!("agent-permission-{width}"))?;
         approve(&mut app)?;
         let state = app.wait_for("completed ACP fixture turn", |state| {
@@ -44,6 +69,7 @@ pub fn run() -> Result<()> {
         );
         review_changed_file(&mut app)?;
         cancel_turn(&mut app, &changed)?;
+        report(&mut app, width)?;
         app.shutdown()?;
     }
     Ok(())
@@ -135,6 +161,39 @@ fn cancel_turn(app: &mut AppDriver, previous: &str) -> Result<()> {
         "cancelled agent turn changed a file"
     );
     Ok(())
+}
+
+/// A turn with a plan, a tool call between two parts of the reply, and a Markdown reply.
+fn report(app: &mut AppDriver, width: u32) -> Result<()> {
+    prompt(app, "Report your progress.")?;
+    let state = app.wait_for("progress report", |state| {
+        session(state).is_some_and(|agent| {
+            agent["status"] == "Ready"
+                && agent["stop_reason"] == "end_turn"
+                && agent["plan"].as_array().is_some_and(|plan| plan.len() == 3)
+                && agent["messages"].to_string().contains("## Summary")
+        }) && has(state, "agent-send")
+    })?;
+    let agent = session(&state).context("missing ACP session")?;
+    ensure!(
+        agent["error"].is_null(),
+        "a malformed update ended the turn: {}",
+        agent["error"]
+    );
+    ensure!(
+        agent["plan"][0]["status"] == "completed" && agent["plan"][1]["status"] == "in_progress",
+        "the latest plan replaces the first: {}",
+        agent["plan"]
+    );
+    capture(app, &state, &format!("agent-report-{width}"))
+}
+
+fn enabled(state: &Value, id: &str) -> Option<bool> {
+    state["controls"]
+        .as_array()?
+        .iter()
+        .find(|control| control["id"] == id)?["enabled"]
+        .as_bool()
 }
 
 fn capture(app: &mut AppDriver, state: &Value, name: &str) -> Result<()> {

@@ -1,17 +1,21 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:38.076712
-//+ Revised: 	2026/11/13 13:36:35.564455
+//+ Revised: 	2026/11/14 12:09:09.597830
 // -----------------------------------------------------------------------------
 
 //! Swapping a verified download in for the running binary, and starting it afterwards.
 
-use super::{download::PREFIX, release::UpdateError};
+use super::{
+    download::{MAX_DOWNLOAD_TIME, PREFIX},
+    release::UpdateError,
+};
 use std::{
     ffi::OsString,
     io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    time::{Duration, SystemTime},
 };
 use tempfile::NamedTempFile;
 
@@ -97,9 +101,29 @@ pub fn relaunch(relaunch: &Relaunch) -> io::Result<()> {
     command.spawn().map(drop)
 }
 
-/// Delete downloads a crashed run left in `dir`; other files there are kept. One file that can't
+/// A download younger than this may be one another Orin window is still making: a download is
+/// given up on after `MAX_DOWNLOAD_TIME` and installed at once, so only an older file is a
+/// leftover.
+pub const LEFTOVER_AGE: Duration = Duration::from_secs(MAX_DOWNLOAD_TIME.as_secs() + 10 * 60);
+
+/// Delete downloads a crashed run left in `dir`; other files there are kept, and so is a
+/// download young enough to still be in progress in another Orin window. One file that can't
 /// be deleted (still open elsewhere, say) is logged and skipped, so it doesn't keep the rest.
 pub fn clean_leftovers(dir: &Path) -> io::Result<usize> {
+    clean_leftovers_older_than(dir, LEFTOVER_AGE)
+}
+
+/// How long ago `entry` was created; where the file system doesn't record that, last written.
+/// A time in the future (the clock was set back) counts as just now.
+fn age(entry: &std::fs::DirEntry) -> io::Result<Duration> {
+    let metadata = entry.metadata()?;
+    let since = metadata.created().or_else(|_| metadata.modified())?;
+    Ok(SystemTime::now()
+        .duration_since(since)
+        .unwrap_or(Duration::ZERO))
+}
+
+fn clean_leftovers_older_than(dir: &Path, minimum: Duration) -> io::Result<usize> {
     let entries = match std::fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
@@ -109,7 +133,8 @@ pub fn clean_leftovers(dir: &Path) -> io::Result<usize> {
     for entry in entries {
         let result = entry.and_then(|entry| {
             let leftover = entry.file_name().to_string_lossy().starts_with(PREFIX)
-                && entry.file_type()?.is_file();
+                && entry.file_type()?.is_file()
+                && age(&entry)? >= minimum;
             if leftover {
                 std::fs::remove_file(entry.path())?;
             }
@@ -189,7 +214,10 @@ mod tests {
         std::fs::write(dir.path().join(format!("{PREFIX}def")), "partial").unwrap();
         std::fs::write(dir.path().join("notes.txt"), "keep").unwrap();
         std::fs::create_dir(dir.path().join(format!("{PREFIX}folder"))).unwrap();
-        assert_eq!(clean_leftovers(dir.path()).unwrap(), 2);
+        assert_eq!(
+            clean_leftovers_older_than(dir.path(), Duration::ZERO).unwrap(),
+            2
+        );
         let mut left: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
@@ -197,6 +225,27 @@ mod tests {
         left.sort();
         assert_eq!(left, ["notes.txt", "orin-update-folder"]);
         assert_eq!(clean_leftovers(&dir.path().join("missing")).unwrap(), 0);
+    }
+
+    #[test]
+    fn unit_a_download_another_window_may_still_be_making_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let download = dir.path().join(format!("{PREFIX}in-progress"));
+        std::fs::write(&download, "half a binary").unwrap();
+        // Just created: it could be a second Orin's download, which used to be deleted under it.
+        assert_eq!(clean_leftovers(dir.path()).unwrap(), 0);
+        assert!(download.exists());
+        assert!(
+            LEFTOVER_AGE > MAX_DOWNLOAD_TIME,
+            "no live download is that old"
+        );
+        // Once it is old enough to be a crashed run's, it goes.
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(
+            clean_leftovers_older_than(dir.path(), Duration::from_millis(20)).unwrap(),
+            1
+        );
+        assert!(!download.exists());
     }
 
     #[test]

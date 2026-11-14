@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 09:16:12.029537
-//+ Revised: 	2026/11/13 07:53:50.970823
+//+ Revised: 	2026/11/14 01:02:31.660382
 // -----------------------------------------------------------------------------
 
 //! The Settings page: appearance (theme, fonts, text size), agent accounts, layout, and updates.
@@ -53,9 +53,62 @@ impl FontSlot {
 const NAVIGATION_WIDTH: f32 = 190.0;
 const MAX_CONTENT_WIDTH: f32 = 760.0;
 
+/// The most tool folders that can be saved.
+const MAX_TOOL_DIRECTORIES: usize = 32;
 const FONT_SAMPLE: &str = "The quick brown fox jumps over the lazy dog · 0O 1lI {}[]";
 
 impl Workspace {
+    pub fn refresh_tools(&mut self, cx: &mut Context<Self>) {
+        self.account_environment.path = crate::process::launch::tool_path(
+            &self.settings.tool_directories,
+            !self.update.test_driver,
+        );
+        let path = self.account_environment.path.clone();
+        let sender = self.sender.clone();
+        self.submit(move || {
+            let providers = super::providers::probe_all_in(path.as_deref());
+            if sender.send(Event::Providers { path, providers }).is_err() {
+                tracing::debug!(target: "orin::accounts", "Workspace closed during tool discovery");
+            }
+        });
+        self.accounts = None;
+        self.refresh_accounts(cx);
+    }
+
+    pub fn choose_tool_directory(&mut self, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Choose the folder containing your agent CLI or Node.js (npx)".into()),
+        });
+        cx.spawn(async move |view, cx| {
+            let result = prompt.await;
+            if let Err(error) = view.update(cx, |view, cx| match result {
+                Ok(Ok(Some(paths))) => {
+                    if let Some(path) = paths.into_iter().next() {
+                        if !view.settings.tool_directories.contains(&path)
+                            && view.settings.tool_directories.len() < MAX_TOOL_DIRECTORIES
+                        {
+                            view.settings.tool_directories.push(path);
+                            view.changed(cx);
+                        }
+                        view.refresh_tools(cx);
+                    }
+                }
+                Ok(Ok(None)) => {}
+                result => {
+                    tracing::warn!(?result, "Tool folder picker failed");
+                    view.error = Some("The folder picker could not open. Try again.".into());
+                    cx.notify();
+                }
+            }) {
+                tracing::debug!(%error, "Workspace closed during tool selection");
+            }
+        })
+        .detach();
+    }
+
     pub fn open_settings(
         &mut self,
         section: SettingsSection,
@@ -139,7 +192,7 @@ impl Workspace {
         let sender = self.sender.clone();
         if self.submit(move || {
             let accounts = accounts::check_all(&environment);
-            if sender.send(Event::Accounts(accounts)).is_err() {
+            if sender.send(Event::Accounts { path: environment.path, accounts }).is_err() {
                 tracing::debug!(target: "orin::accounts", "workspace closed during the account check");
             }
         }) {
@@ -473,15 +526,9 @@ impl Workspace {
                 Emphasis::Normal
             })
             .tooltip(format!("Choose the {} font", slot.key()))
-            .icon_text(
-                if open {
-                    Icon::ChevronDown
-                } else {
-                    Icon::ChevronRight
-                },
-                shown,
-                move |view, _, cx| view.toggle_font_picker(slot, cx),
-            );
+            .text_icon(shown, Icon::ChevronDown, move |view, _, cx| {
+                view.toggle_font_picker(slot, cx)
+            });
         let list = open.then(|| {
             let names = self.font_names.as_deref().unwrap_or_default();
             let missing = chosen
@@ -585,7 +632,7 @@ impl Workspace {
                 } else {
                     "Check again"
                 },
-                |view, _, cx| view.refresh_accounts(cx),
+                |view, _, cx| view.refresh_tools(cx),
             );
         let cards = Provider::ALL.map(|provider| self.account_card(provider, cx));
         let mut elements = vec![
@@ -593,7 +640,77 @@ impl Workspace {
             div().flex().child(refresh).into_any_element(),
         ];
         elements.extend(cards);
+        elements.push(setting(
+            "Tool folders",
+            "Orin runs the agents' command-line tools, not their VS Code extensions, and needs \
+             Node.js to run their adapters. If a tool is installed outside the usual places, add \
+             the folder that contains claude, codex, gemini, or npx.",
+            self.tool_folders(cx),
+        ));
         elements
+    }
+
+    /// The saved tool folders, each removable, then the button that adds one.
+    fn tool_folders(&self, cx: &Context<Self>) -> AnyElement {
+        let colors = theme::colors();
+        let folders = self
+            .settings
+            .tool_directories
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let remove = path.clone();
+                theme::row()
+                    .h(theme::scaled(30.))
+                    .gap_2()
+                    .pl_3()
+                    .pr_1()
+                    .rounded(theme::scaled(theme::RADIUS))
+                    .border_1()
+                    .border_color(rgb(colors.border))
+                    .bg(rgb(colors.panel))
+                    .child(icon(Icon::Folder, colors.walnut))
+                    .child(theme::clipped(
+                        crate::process::launch::native_path(path)
+                            .display()
+                            .to_string(),
+                    ))
+                    .child(
+                        ControlSpec::new(
+                            format!("agent-remove-tool-folder-{index}"),
+                            &self.controls,
+                            cx,
+                        )
+                        .enabled(!self.closing)
+                        .tooltip("Remove this tool folder")
+                        .icon(Icon::Close, move |view, _, cx| {
+                            view.settings
+                                .tool_directories
+                                .retain(|entry| entry != &remove);
+                            view.changed(cx);
+                            view.refresh_tools(cx);
+                        }),
+                    )
+            });
+        let full = self.settings.tool_directories.len() >= MAX_TOOL_DIRECTORIES;
+        theme::column()
+            .gap_2()
+            .children(folders)
+            .child(
+                div().flex().child(
+                    ControlSpec::new("agent-add-tool-folder", &self.controls, cx)
+                        .enabled(!self.closing && !full)
+                        .tooltip(if full {
+                            "Remove a folder before adding another"
+                        } else {
+                            "Add a folder to search for agent tools"
+                        })
+                        .icon_text(Icon::Plus, "Add tool folder…", |view, _, cx| {
+                            view.choose_tool_directory(cx)
+                        }),
+                ),
+            )
+            .into_any_element()
     }
 
     fn account_card(&self, provider: Provider, cx: &Context<Self>) -> AnyElement {
@@ -648,7 +765,7 @@ impl Workspace {
             .border_1()
             .border_color(rgb(colors.border))
             .bg(rgb(colors.panel))
-            .child(icon(Icon::Agents, colors.muted))
+            .child(icon(super::controls::agent_icon(provider), colors.text))
             .child(
                 // Single lines that clip rather than wrap, so a card never grows taller than two lines.
                 theme::column()
@@ -680,6 +797,20 @@ impl Workspace {
                             })),
                     ),
             )
+            .children((account.is_some() && !installed).then(|| {
+                ControlSpec::new(
+                    format!("agent-install-{}", provider_id(provider)),
+                    &self.controls,
+                    cx,
+                )
+                .tooltip(format!(
+                    "Open the {} installation guide in your browser",
+                    provider.label()
+                ))
+                .icon_text(Icon::Guide, "Install guide", move |_, _, cx| {
+                    cx.open_url(provider.setup_url())
+                })
+            }))
             .child(
                 div()
                     .id(gpui::SharedString::from(format!("{id}-sign-in-hint")))

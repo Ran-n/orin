@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:35:22.063603
-//+ Revised: 	2026/11/12 10:31:35.259659
+//+ Revised: 	2026/11/14 01:02:26.100390
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -146,6 +146,14 @@ impl AgentSession {
 
     pub fn snapshot(&self) -> AgentSnapshot {
         lock(&self.state).clone()
+    }
+
+    /// The current state when it differs from `known`, the copy the caller already holds.
+    /// A view polls many times a second; copying a long conversation each time only to find
+    /// it unchanged would cost megabytes per poll.
+    pub fn changed_snapshot(&self, known: &AgentSnapshot) -> Option<AgentSnapshot> {
+        let state = lock(&self.state);
+        (*state != *known).then(|| state.clone())
     }
     pub fn process_id(&self) -> u32 {
         self.process_id

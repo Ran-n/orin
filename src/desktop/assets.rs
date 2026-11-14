@@ -1,11 +1,12 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:18:28.933335
-//+ Revised: 	2026/11/12 22:43:39.034540
+//+ Revised: 	2026/11/14 01:02:28.548882
 // -----------------------------------------------------------------------------
 
 //! Embedded images: the approved mascot and the interface icons, so a built app needs no asset folder.
 
+use super::mascot_frame::trimmed_square;
 use gpui::{AssetSource, ImageSource, RenderImage, SharedString};
 use image::{Frame, RgbaImage, imageops::FilterType};
 use std::{
@@ -22,6 +23,9 @@ const MASCOT_PNG: &[u8] = include_bytes!("../../assets/branding/orin-mascot.png"
 pub enum Icon {
     Account,
     Agents,
+    Claude,
+    OpenAi,
+    Gemini,
     ArchiveFile,
     AssetsFolder,
     BuildFile,
@@ -75,6 +79,9 @@ pub enum Icon {
     TextFile,
     Unchecked,
     Undo,
+    More,
+    Pending,
+    Working,
 }
 
 macro_rules! icons {
@@ -97,6 +104,9 @@ macro_rules! icons {
 icons! {
     Account => "circle-user-round.svg",
     Agents => "bot.svg",
+    Claude => "claude.svg",
+    OpenAi => "openai.svg",
+    Gemini => "gemini.svg",
     ArchiveFile => "file-archive.svg",
     AssetsFolder => "folder-heart.svg",
     BuildFile => "hammer.svg",
@@ -150,6 +160,9 @@ icons! {
     TextFile => "file-text.svg",
     Unchecked => "square.svg",
     Undo => "undo-2.svg",
+    More => "ellipsis.svg",
+    Pending => "circle.svg",
+    Working => "loader.svg",
 }
 
 pub struct Assets;
@@ -174,7 +187,8 @@ impl AssetSource for Assets {
 
 /// The mascot resampled to exactly `pixels` device pixels square.
 ///
-/// The source is 1254 px. Letting the GPU shrink it to a few dozen pixels in one step skips most
+/// The art fills the square's longer side: the PNG's transparent margin is trimmed first, so the
+/// mascot is as large as its slot allows. Letting the GPU shrink it to a few dozen pixels in one step skips most
 /// source pixels and looks jagged, so it is resampled once with a Lanczos filter and cached per size.
 pub fn mascot(pixels: u32) -> ImageSource {
     thread_local! {
@@ -191,12 +205,12 @@ pub fn mascot(pixels: u32) -> ImageSource {
     ImageSource::Render(image)
 }
 
-/// The decoded source, shared by every size. The embedded PNG is verified by tests, so a decode
+/// The decoded source without its transparent margin, shared by every size. The embedded PNG is verified by tests, so a decode
 /// failure is a build defect; it is logged and drawn as a transparent square rather than crashing.
 fn source() -> &'static RgbaImage {
     static SOURCE: OnceLock<RgbaImage> = OnceLock::new();
     SOURCE.get_or_init(|| match image::load_from_memory(MASCOT_PNG) {
-        Ok(image) => image.into_rgba8(),
+        Ok(image) => trimmed_square(&image.into_rgba8()),
         Err(error) => {
             tracing::error!(target: "orin::desktop", %error, "Embedded mascot could not be decoded");
             RgbaImage::new(1, 1)
@@ -223,13 +237,21 @@ mod tests {
             let bytes = Assets.load(icon.path()).unwrap().expect("icon bytes");
             assert!(String::from_utf8_lossy(&bytes).contains("<svg"), "{icon:?}");
         }
-        assert_eq!(Assets.list("icons/").unwrap().len(), Icon::ALL.len());
+        assert_eq!(Assets.list("").unwrap().len(), Icon::ALL.len());
         assert!(Assets.load("orin-mascot.png").unwrap().is_none());
     }
 
     #[test]
-    fn embedded_mascot_decodes_at_full_resolution() {
-        assert_eq!(source().dimensions(), (1254, 1254));
+    fn embedded_mascot_decodes_at_full_resolution_without_its_margin() {
+        let source = source();
+        let (width, height) = source.dimensions();
+        assert_eq!(width, height);
+        assert!((1000..1254).contains(&width), "{width}");
+        // The acorn is taller than wide: it touches the top and bottom rows, not the side columns.
+        let visible = |x: u32, y: u32| source.get_pixel(x, y)[3] > 16;
+        assert!((0..width).any(|x| visible(x, 0)));
+        assert!((0..width).any(|x| visible(x, height - 1)));
+        assert!((0..height).all(|y| !visible(0, y) && !visible(width - 1, y)));
     }
 
     #[test]

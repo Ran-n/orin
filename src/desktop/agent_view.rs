@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:43:35.350775
-//+ Revised: 	2026/11/12 09:16:21.070607
+//+ Revised: 	2026/11/14 01:02:27.885621
 // -----------------------------------------------------------------------------
 
 //! Structured conversation state; the agent's terminal screen is never parsed.
@@ -9,31 +9,42 @@
 use super::{
     controls::Controls,
     editor::{EditorAction, TextEditor, TextValue},
+    markdown::{self, Block},
 };
-use crate::agents::{AgentSession, AgentSnapshot, AgentStatus};
+use crate::agents::{AgentMessage, AgentSession, AgentSnapshot, AgentStatus, MessageRole};
 use gpui::{Context, Entity, EventEmitter, ScrollHandle, prelude::*};
 use std::{
     path::PathBuf,
+    rc::Rc,
     sync::{Arc, Mutex},
 };
 
 #[derive(Clone)]
 pub enum AgentAction {
+    /// A file the agent reported changing, by the path the agent gave.
     OpenFile(PathBuf),
+    /// A project file linked from a reply, relative to the project root.
+    OpenProjectFile(PathBuf),
 }
 
 pub struct AgentView {
     pub session: Arc<Mutex<AgentSession>>,
+    /// The project folder the agent works in; paths inside it are shown relative to it.
+    pub root: PathBuf,
     pub snapshot: AgentSnapshot,
     pub composer: Entity<TextEditor>,
     pub controls: Controls,
     pub scroll: ScrollHandle,
     pub error: Option<String>,
+    /// Each message's reply parsed as Markdown, in step with `snapshot.messages`; empty for the
+    /// user's own messages and reasoning, which are shown as written.
+    pub replies: Vec<Rc<[Block]>>,
 }
 
 impl AgentView {
     pub fn new(
         session: Arc<Mutex<AgentSession>>,
+        root: PathBuf,
         controls: Controls,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -50,29 +61,31 @@ impl AgentView {
             }
         })
         .detach();
+        let replies = parsed_replies(&[], Vec::new(), &snapshot.messages);
         Self {
             session,
+            root,
             snapshot,
             composer,
             controls,
             scroll: ScrollHandle::new(),
             error: None,
+            replies,
         }
-    }
-    pub fn running(&self) -> bool {
-        !matches!(
-            self.snapshot.status,
-            AgentStatus::Stopped | AgentStatus::Failed
-        )
     }
     pub fn poll(&mut self, cx: &mut Context<Self>) {
         let Ok(session) = self.session.try_lock() else {
             return;
         };
-        let snapshot = session.snapshot();
+        let changed = session.changed_snapshot(&self.snapshot);
         drop(session);
-        if snapshot != self.snapshot {
+        if let Some(snapshot) = changed {
             let follow = self.scroll.offset().y <= -self.scroll.max_offset().height + gpui::px(24.);
+            self.replies = parsed_replies(
+                &self.snapshot.messages,
+                std::mem::take(&mut self.replies),
+                &snapshot.messages,
+            );
             self.snapshot = snapshot;
             if follow {
                 self.scroll.scroll_to_bottom();
@@ -168,13 +181,40 @@ impl AgentView {
 }
 impl EventEmitter<AgentAction> for AgentView {}
 
+/// The parsed replies for `messages`, reusing `parsed` (the replies of `previous`) wherever a
+/// message is unchanged: while a reply streams in, only the message being written is parsed
+/// again, not the whole conversation.
+pub fn parsed_replies(
+    previous: &[AgentMessage],
+    mut parsed: Vec<Rc<[Block]>>,
+    messages: &[AgentMessage],
+) -> Vec<Rc<[Block]>> {
+    parsed.truncate(messages.len());
+    for (index, message) in messages.iter().enumerate() {
+        if index < parsed.len() && previous.get(index) == Some(message) {
+            continue;
+        }
+        let blocks: Rc<[Block]> = if message.role == MessageRole::Agent {
+            markdown::parse(&message.text).into()
+        } else {
+            Rc::from([])
+        };
+        if index < parsed.len() {
+            parsed[index] = blocks;
+        } else {
+            parsed.push(blocks);
+        }
+    }
+    parsed
+}
+
 pub fn status_label(status: AgentStatus) -> &'static str {
     match status {
-        AgentStatus::Starting => "Connecting",
+        AgentStatus::Starting => "Connecting…",
         AgentStatus::Ready => "Ready",
-        AgentStatus::Working => "Working",
+        AgentStatus::Working => "Working…",
         AgentStatus::WaitingPermission => "Needs your approval",
-        AgentStatus::Cancelling => "Cancelling",
+        AgentStatus::Cancelling => "Cancelling…",
         AgentStatus::AuthRequired => "Sign in required",
         AgentStatus::Failed => "Stopped after an error",
         AgentStatus::Stopped => "Stopped",
@@ -193,5 +233,69 @@ pub fn status_color(status: AgentStatus) -> u32 {
         }
         AgentStatus::Failed => super::theme::colors().error,
         AgentStatus::Stopped => super::theme::colors().faint,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(role: MessageRole, text: &str) -> AgentMessage {
+        AgentMessage {
+            role,
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn unit_only_changed_replies_are_parsed_again() {
+        let first = vec![
+            message(MessageRole::User, "**not parsed**"),
+            message(MessageRole::Agent, "# Title"),
+            message(MessageRole::Agent, "streaming"),
+        ];
+        let parsed = parsed_replies(&[], Vec::new(), &first);
+        assert_eq!(parsed.len(), 3);
+        assert!(parsed[0].is_empty(), "the user's text is shown as written");
+        assert!(matches!(parsed[1][0], Block::Heading(1, _)));
+
+        let mut second = first.clone();
+        second[2].text.push_str(" more\n\n- item");
+        second.push(message(MessageRole::Thought, "thinking"));
+        let kept = parsed[1].clone();
+        let updated = parsed_replies(&first, parsed, &second);
+        assert_eq!(updated.len(), 4);
+        assert!(
+            Rc::ptr_eq(&kept, &updated[1]),
+            "an unchanged reply keeps its blocks"
+        );
+        assert_eq!(updated[2].len(), 2, "the streamed reply is parsed again");
+        assert!(updated[3].is_empty(), "reasoning is shown as written");
+
+        // A shorter conversation (a new session's first snapshot) drops the stale replies.
+        let shorter = parsed_replies(&second, updated, &second[..1]);
+        assert_eq!(shorter.len(), 1);
+    }
+
+    #[test]
+    fn unit_every_status_has_a_label_and_a_colour() {
+        for status in [
+            AgentStatus::Starting,
+            AgentStatus::Ready,
+            AgentStatus::Working,
+            AgentStatus::WaitingPermission,
+            AgentStatus::Cancelling,
+            AgentStatus::AuthRequired,
+            AgentStatus::Failed,
+            AgentStatus::Stopped,
+        ] {
+            assert!(!status_label(status).is_empty());
+            assert_ne!(status_color(status), 0);
+        }
+        assert_ne!(
+            status_color(AgentStatus::Ready),
+            status_color(AgentStatus::WaitingPermission),
+            "an agent waiting on you never looks idle"
+        );
     }
 }

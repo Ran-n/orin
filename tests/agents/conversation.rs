@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 18:02:55.077310
-//+ Revised: 	2026/11/13 16:21:23.581508
+//+ Revised: 	2026/11/14 01:02:34.867303
 // -----------------------------------------------------------------------------
 
 use super::support::{ready, spawn, wait};
@@ -46,6 +46,67 @@ fn integration_handshake_streaming_and_wire_contract_are_real_subprocess_io() {
     assert_eq!(frames[1]["params"]["mcpServers"], serde_json::json!([]));
     assert_eq!(frames[2]["method"], "session/prompt");
     assert_eq!(frames[2]["params"]["sessionId"], "fixture-session");
+    session.stop().unwrap();
+}
+
+#[test]
+fn integration_a_report_keeps_its_plan_and_shows_tool_calls_where_they_happened() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = spawn("normal", directory.path());
+    ready(&session);
+    session.prompt("Report your progress.").unwrap();
+    let state = wait(&session, |state| {
+        state.status == AgentStatus::Ready && state.stop_reason.is_some()
+    });
+    // The malformed update in the middle of the turn was skipped, not fatal.
+    assert!(state.error.is_none(), "{:?}", state.error);
+    // The latest plan replaced the first; it is not conversation text.
+    let plan: Vec<_> = state
+        .plan
+        .iter()
+        .map(|entry| (entry.content.as_str(), entry.status.as_str()))
+        .collect();
+    assert_eq!(
+        plan,
+        [
+            ("Read the entry point", "completed"),
+            ("Update the greeting", "in_progress"),
+            ("Run the tests", "pending"),
+        ]
+    );
+    // You, the text before the tool call, then the text after it as its own message.
+    let roles: Vec<_> = state.messages.iter().map(|message| message.role).collect();
+    assert_eq!(
+        roles,
+        [MessageRole::User, MessageRole::Agent, MessageRole::Agent]
+    );
+    assert_eq!(state.messages[1].text, "Reading the entry point.");
+    assert!(state.messages[2].text.starts_with("## Summary"));
+    assert_eq!(state.tool_calls.len(), 1);
+    assert_eq!(state.tool_calls[0].title, "Read src/main.rs");
+    assert_eq!(state.tool_calls[0].after_message, 2);
+    assert!(
+        state.changed_files.is_empty(),
+        "reading a file changes nothing"
+    );
+    session.stop().unwrap();
+}
+
+#[test]
+fn integration_a_snapshot_is_copied_only_when_the_session_changed() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut session = spawn("normal", directory.path());
+    let known = ready(&session);
+    assert!(
+        session.changed_snapshot(&known).is_none(),
+        "an idle session has nothing new to copy"
+    );
+    session.prompt("Explain this project.").unwrap();
+    let finished = wait(&session, |state| {
+        state.status == AgentStatus::Ready && state.stop_reason.is_some()
+    });
+    assert_eq!(session.changed_snapshot(&known), Some(finished.clone()));
+    assert!(session.changed_snapshot(&finished).is_none());
     session.stop().unwrap();
 }
 

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:13:22.358859
-//+ Revised: 	2026/11/13 08:33:02.680766
+//+ Revised: 	2026/11/14 12:09:20.629690
 // -----------------------------------------------------------------------------
 
 #![cfg(all(target_os = "windows", feature = "desktop"))]
@@ -13,6 +13,51 @@ use rendered::{driver::AppDriver, pixels, snapshots};
 use serde_json::Value;
 
 const VIEWPORTS: [(u32, u32); 2] = [(1280, 800), (1000, 680)];
+
+#[test]
+#[ignore = "requires an interactive Windows desktop and native GPU rendering"]
+fn custom_agent_folder_is_used_and_can_be_removed() -> Result<()> {
+    let scratch = tempfile::tempdir()?;
+    let tools = scratch.path().join("agent tools Ω");
+    std::fs::create_dir(&tools)?;
+    std::fs::write(
+        tools.join("claude.cmd"),
+        "@echo off\r\necho {\"loggedIn\":true,\"authMethod\":\"fixture\"}\r\n",
+    )?;
+    std::fs::write(tools.join("npx.cmd"), "@exit /b 0\r\n")?;
+    std::fs::write(
+        scratch.path().join("settings.json"),
+        serde_json::to_vec(&serde_json::json!({"tool_directories":[tools]}))?,
+    )?;
+    let mut app = AppDriver::start_in(
+        scratch,
+        rendered::fixture::LaunchOptions {
+            open_project: true,
+            ..Default::default()
+        },
+    )?;
+    app.click("open-settings")?;
+    app.click("settings-section-accounts")?;
+    app.wait_for("configured Claude installation", |state| {
+        state["accounts"].as_array().is_some_and(|accounts| {
+            accounts.iter().any(|account| {
+                account["id"] == "claude" && account["sign_in"]["state"] == "signed_in"
+            })
+        }) && has_control(state, "agent-remove-tool-folder-0")
+    })?;
+    app.click("agent-remove-tool-folder-0")?;
+    app.wait_for("removed tool folder", |state| {
+        state["accounts"].as_array().is_some_and(|accounts| {
+            accounts
+                .iter()
+                .any(|account| account["id"] == "claude" && account["sign_in"]["state"] == "no_cli")
+        })
+    })?;
+    app.wait_for_saved("removed tool folder", |saved| {
+        saved.get("tool_directories").is_none()
+    })?;
+    app.shutdown()
+}
 
 #[test]
 #[ignore = "requires an interactive Windows desktop and native GPU rendering"]
@@ -73,27 +118,41 @@ fn first_open_shows_welcome_with_recent_folders_and_opens_one() -> Result<()> {
     app.wait_for("terminal autostart", |state| {
         state["terminal"]["running"] == true
     })?;
-    // While the shell runs, switching folders would be refused, so every Open control says so.
-    let state = app.wait_for("open disabled while the terminal runs", |state| {
-        control_enabled(state, "open-project") == Some(false)
+    // An automatically started shell must not prevent project navigation.
+    let state = app.wait_for("open remains enabled while the terminal runs", |state| {
+        control_enabled(state, "open-project") == Some(true)
     })?;
     ensure!(
         state["error"].is_null(),
         "nothing was refused: {}",
         state["error"]
     );
-    // The logo brings Welcome back, now with a way back to the project.
+    // Home closes the project, including its automatically started shell.
     app.click("open-welcome")?;
     let state = app.wait_for("welcome again", |state| {
-        state["page"] == "welcome" && has_control(state, "welcome-back")
+        state["page"] == "welcome"
+            && state["project_root"].is_null()
+            && control_enabled(state, "recent-0") == Some(true)
     })?;
     ensure!(
-        control_enabled(&state, "welcome-open-folder") == Some(false)
-            && control_enabled(&state, "recent-0") == Some(false),
-        "Open Folder and Recent are disabled while the terminal runs"
+        control_enabled(&state, "welcome-open-folder") == Some(true)
+            && state["terminal"]["running"] == false,
+        "Home must stop the shell and leave Recent usable"
     );
-    app.click("welcome-back")?;
+    app.wait_for_saved("closed folder", |saved| saved["project"].is_null())?;
+    app.click("recent-0")?;
     app.wait_for("back to the project", |state| state["page"].is_null())?;
+    app.wait_for("reopened shell", |state| {
+        state["terminal"]["running"] == true
+    })?;
+    app.click("close-project")?;
+    app.wait_for("explicit Close Folder", |state| {
+        state["project_root"].is_null() && control_enabled(state, "recent-0") == Some(true)
+    })?;
+    app.click("recent-0")?;
+    app.wait_for("reopened from Recent again", |state| {
+        !state["project_root"].is_null() && state["page"].is_null()
+    })?;
     // Saves can trail the state, so wait for the file to show the remembered folder.
     app.wait_for_saved("recent folders", |saved| {
         saved["recent_projects"]
@@ -160,7 +219,15 @@ fn project_workspace_has_visible_panes_and_disabled_unavailable_agents() -> Resu
                 "workspace control {id} is absent"
             );
         }
-        for id in ["agent-claude", "agent-codex", "agent-gemini"] {
+        for id in [
+            "agent-claude",
+            "agent-codex",
+            "agent-gemini",
+            // The empty Agents column repeats the launchers as labelled buttons.
+            "start-claude",
+            "start-codex",
+            "start-gemini",
+        ] {
             let control = controls
                 .iter()
                 .find(|control| control["id"] == id)
@@ -170,6 +237,11 @@ fn project_workspace_has_visible_panes_and_disabled_unavailable_agents() -> Resu
                 "unavailable agent {id} is actionable"
             );
         }
+        // With agents that can't start, the column offers the way to set them up.
+        ensure!(
+            control_enabled(&state, "setup-agents") == Some(true),
+            "Set up agents is absent or disabled"
+        );
         ensure!(
             state["git"]["ignored"]
                 .as_array()
@@ -724,6 +796,17 @@ fn accounts_show_agent_sign_ins_and_start_one_in_the_terminal() -> Result<()> {
         control_enabled(&state, "account-sign-in-claude"),
         control_enabled(&state, "account-sign-in-codex")
     );
+    // A missing CLI gets its installation guide on its own card; an installed one doesn't.
+    ensure!(
+        control_enabled(&state, "agent-install-claude") == Some(true)
+            && control_enabled(&state, "agent-install-gemini") == Some(true)
+            && !has_control(&state, "agent-install-codex"),
+        "the installation guide is offered exactly for the agents whose CLI is missing"
+    );
+    ensure!(
+        control_enabled(&state, "agent-add-tool-folder") == Some(true),
+        "Add tool folder is absent or disabled"
+    );
     for (width, height) in VIEWPORTS {
         app.resize(width, height)?;
         let state = app.state()?;
@@ -792,7 +875,7 @@ fn markdown_preview_toggles_renders_and_is_remembered() -> Result<()> {
         "preview shows Markdown syntax instead of rendering it: {text}"
     );
     ensure!(
-        control_enabled(&state, "editor-undo") == Some(false),
+        control_enabled(&state, "editor-undo") != Some(true),
         "undo is offered while the source is hidden"
     );
     for (width, height) in VIEWPORTS {
@@ -854,6 +937,12 @@ fn update_check_in_flight_does_not_hold_up_quitting() -> Result<()> {
 #[ignore = "requires an interactive Windows desktop and native GPU rendering"]
 fn update_install_restarts_into_same_project() -> Result<()> {
     rendered::update_flow::install_restarts_into_same_project()
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop and native GPU rendering"]
+fn update_signed_by_someone_else_is_refused() -> Result<()> {
+    rendered::update_flow::wrong_signature_is_refused()
 }
 
 #[test]

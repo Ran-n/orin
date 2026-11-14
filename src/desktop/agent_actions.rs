@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:42:12.796873
-//+ Revised: 	2026/11/12 15:10:20.864725
+//+ Revised: 	2026/11/14 01:02:27.205996
 // -----------------------------------------------------------------------------
 
 //! Structured agent session creation and conversation selection.
@@ -49,6 +49,7 @@ impl Workspace {
             .to_owned();
         let generation = self.project_generation;
         let sender = self.sender.clone();
+        let tool_path = self.account_environment.path.clone();
         let fixture = self
             .test_agent
             .clone()
@@ -60,7 +61,7 @@ impl Workspace {
                     std::process::Command::new(executable),
                     &path,
                 ),
-                None => AgentSession::spawn(provider, &path),
+                None => AgentSession::spawn_in_path(provider, &path, tool_path.as_deref()),
             };
             if sender
                 .send(Event::Agent {
@@ -91,7 +92,12 @@ impl Workspace {
                 let session = Arc::new(Mutex::new(session));
                 let handle = session.clone();
                 let controls = self.controls.clone();
-                let view = cx.new(|cx| AgentView::new(handle, controls, cx));
+                let root = self
+                    .project
+                    .as_ref()
+                    .map(|project| project.root().to_owned())
+                    .unwrap_or_default();
+                let view = cx.new(|cx| AgentView::new(handle, root, controls, cx));
                 cx.observe(&view, |_, _, cx| cx.notify()).detach();
                 cx.subscribe(&view, |view, _, action, cx| match action {
                     AgentAction::OpenFile(path) => {
@@ -111,6 +117,7 @@ impl Workspace {
                             cx.notify();
                         }
                     }
+                    AgentAction::OpenProjectFile(path) => view.select_file(path.clone(), cx),
                 })
                 .detach();
                 self.agents.push(AgentTab {

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:46:34.926090
-//+ Revised: 	2026/11/12 10:31:36.611333
+//+ Revised: 	2026/11/14 01:02:28.281985
 // -----------------------------------------------------------------------------
 
 //! The Agents column: one tab per session, the selected conversation, and agent launchers.
@@ -18,6 +18,8 @@ use crate::agents::Provider;
 use gpui::{AnyElement, Context, MouseButton, div, img, prelude::*, px, rgb};
 
 const MASCOT_SIZE: f32 = 72.0;
+/// The width of the launch buttons in the empty Agents column.
+const LAUNCHER_WIDTH: f32 = 190.0;
 
 fn short_label(provider: Provider) -> &'static str {
     match provider {
@@ -50,11 +52,9 @@ impl Workspace {
                 )
                 .enabled(self.can_launch(provider))
                 .tooltip(tooltip)
-                .icon_text(
-                    Icon::Plus,
-                    short_label(provider),
-                    move |view, _, cx| view.launch_agent(provider, cx),
-                )
+                .agent_text(provider, "", move |view, _, cx| {
+                    view.launch_agent(provider, cx)
+                })
             })
             .collect()
     }
@@ -70,14 +70,12 @@ impl Workspace {
                 .min_h_0()
                 .child(self.agents[selected].view.clone())
                 .into_any_element(),
-            None => self.empty_agents(),
+            None => self.empty_agents(cx),
         };
         theme::column()
             .flex_1()
             .when_some(selected, |column, selected| {
-                column
-                    .child(self.session_tabs(selected, cx))
-                    .children(self.session_options(selected, cx))
+                column.children(self.session_options(selected, cx))
             })
             .child(body)
             .into_any_element()
@@ -129,9 +127,9 @@ impl Workspace {
                         } else {
                             format!("Choose the {}", option.name.to_lowercase())
                         })
-                        .icon_text(
-                            Icon::ChevronDown,
+                        .text_icon(
                             option.current_name().to_owned(),
+                            Icon::ChevronDown,
                             move |view, window, cx| {
                                 view.toggle_menu(menu.clone(), &anchor, window, cx)
                             },
@@ -142,11 +140,19 @@ impl Workspace {
     }
 
     /// One tab per running session; scrolls sideways when there are more than fit.
+    pub fn agent_tabs(&self, cx: &Context<Self>) -> AnyElement {
+        if self.agents.is_empty() {
+            return div().flex_1().into_any_element();
+        }
+        self.session_tabs(self.settings.active_session.min(self.agents.len() - 1), cx)
+    }
+
     fn session_tabs(&self, selected: usize, cx: &Context<Self>) -> AnyElement {
         theme::row()
             .id("agent-tabs")
             .h(theme::scaled(theme::HEADER_HEIGHT))
-            .flex_shrink_0()
+            .flex_1()
+            .min_w_0()
             .bg(rgb(theme::colors().panel))
             .border_b_1()
             .border_color(rgb(theme::colors().border))
@@ -160,14 +166,15 @@ impl Workspace {
                 theme::row()
                     .id(gpui::SharedString::from(id.clone()))
                     .relative()
-                    .h(theme::scaled(theme::CONTROL_HEIGHT))
+                    .h(theme::scaled(theme::HEADER_HEIGHT))
                     .flex_shrink_0()
                     .pl_2()
                     .pr_1()
                     .gap_2()
-                    .rounded(theme::scaled(theme::RADIUS))
+                    .border_r_1()
+                    .border_color(rgb(theme::colors().border))
                     .bg(rgb(if active {
-                        theme::colors().active
+                        theme::colors().background
                     } else {
                         theme::colors().panel
                     }))
@@ -185,6 +192,10 @@ impl Workspace {
                             .rounded_full()
                             .bg(rgb(status_color(status))),
                     )
+                    .child(super::controls::icon(
+                        super::controls::agent_icon(tab.provider),
+                        theme::colors().text,
+                    ))
                     .child(format!("{} {}", short_label(tab.provider), index + 1))
                     .child(
                         ControlSpec::new(format!("close-agent-{index}"), &self.controls, cx)
@@ -204,20 +215,34 @@ impl Workspace {
             .into_any_element()
     }
 
-    fn empty_agents(&self) -> AnyElement {
-        let hints = self
-            .providers
-            .iter()
-            .filter(|(_, status)| !status.available)
-            .map(|(provider, _)| {
-                div()
-                    .max_w(theme::scaled(420.))
-                    .text_size(theme::scaled(theme::SMALL_TEXT))
-                    .text_color(rgb(theme::colors().faint))
-                    .whitespace_normal()
-                    .text_center()
-                    .child(provider.install_hint())
-            });
+    /// Nothing running yet: the mascot, then one prominent button per agent. Agents that can't
+    /// start are greyed out, with a single explanation and the way to set them up.
+    fn empty_agents(&self, cx: &Context<Self>) -> AnyElement {
+        let colors = theme::colors();
+        let missing = self.providers.iter().any(|(_, status)| !status.available);
+        let launchers = self.providers.iter().map(|(provider, status)| {
+            let provider = *provider;
+            ControlSpec::new(
+                format!("start-{}", provider_id(provider)),
+                &self.controls,
+                cx,
+            )
+            .enabled(self.can_launch(provider))
+            .large()
+            .full_width()
+            .tooltip(if status.available {
+                format!("Start a {} session", provider.label())
+            } else {
+                format!(
+                    "{} isn't installed. {}",
+                    provider.label(),
+                    provider.install_hint()
+                )
+            })
+            .agent_text(provider, provider.label(), move |view, _, cx| {
+                view.launch_agent(provider, cx)
+            })
+        });
         theme::column()
             .id("agent-welcome")
             .flex_1()
@@ -235,16 +260,51 @@ impl Workspace {
             .child(
                 div()
                     .text_size(theme::scaled(theme::SMALL_TEXT))
-                    .text_color(rgb(theme::colors().muted))
+                    .text_color(rgb(colors.muted))
                     .text_center()
                     .child(if self.project.is_some() {
-                        "Start an agent above and give it an intention."
+                        "Start an agent and give it an intention."
                     } else {
                         "Open a project, then start an agent to carry it forward."
                     }),
             )
-            .child(div().h(theme::scaled(6.)))
-            .children(hints)
+            .child(
+                // One per row at a shared width: a row of buttons would wrap unevenly in a
+                // narrow column.
+                theme::column()
+                    .w(theme::scaled(LAUNCHER_WIDTH))
+                    .flex_shrink_0()
+                    .gap_2()
+                    .pt_2()
+                    .children(launchers),
+            )
+            .when(missing, |view| {
+                view.child(
+                    div()
+                        .max_w(theme::scaled(360.))
+                        .pt_2()
+                        .text_size(theme::scaled(theme::SMALL_TEXT))
+                        .text_color(rgb(colors.muted))
+                        .whitespace_normal()
+                        .text_center()
+                        .child(
+                            "A greyed-out agent needs its command-line tool and Node.js \
+                             before it can start.",
+                        ),
+                )
+                .child(
+                    ControlSpec::new("setup-agents", &self.controls, cx)
+                        .enabled(!self.closing)
+                        .tooltip("Open Settings › Accounts")
+                        .icon_text(Icon::Settings, "Set up agents", |view, window, cx| {
+                            view.open_settings(
+                                crate::settings::SettingsSection::Accounts,
+                                window,
+                                cx,
+                            )
+                        }),
+                )
+            })
             .into_any_element()
     }
 }

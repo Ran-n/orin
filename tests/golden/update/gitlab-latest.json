@@ -6,7 +6,7 @@
   "released_at": "2026-12-01T10:30:00.000Z",
   "upcoming_release": false,
   "assets": {
-    "count": 10,
+    "count": 13,
     "sources": [
       {
         "format": "zip",
@@ -29,6 +29,13 @@
         "link_type": "package"
       },
       {
+        "id": 7,
+        "name": "orin-0.3.0-windows-x86_64.exe.sig",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000016/orin-0.3.0-windows-x86_64.exe.sig",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-windows-x86_64.exe.sig",
+        "link_type": "package"
+      },
+      {
         "id": 3,
         "name": "orin-0.3.0-linux-x86_64",
         "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000002/orin-0.3.0-linux-x86_64",
@@ -43,6 +50,13 @@
         "link_type": "package"
       },
       {
+        "id": 8,
+        "name": "orin-0.3.0-linux-x86_64.sig",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000017/orin-0.3.0-linux-x86_64.sig",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-linux-x86_64.sig",
+        "link_type": "package"
+      },
+      {
         "id": 5,
         "name": "orin-0.3.0-macos-aarch64",
         "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000004/orin-0.3.0-macos-aarch64",
@@ -54,6 +68,13 @@
         "name": "orin-0.3.0-macos-aarch64.b3",
         "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000005/orin-0.3.0-macos-aarch64.b3",
         "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-macos-aarch64.b3",
+        "link_type": "package"
+      },
+      {
+        "id": 9,
+        "name": "orin-0.3.0-macos-aarch64.sig",
+        "url": "https://gitlab.com/-/project/1/uploads/00000000000000000000000000000018/orin-0.3.0-macos-aarch64.sig",
+        "direct_asset_url": "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0/downloads/orin-0.3.0-macos-aarch64.sig",
         "link_type": "package"
       }
     ]

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:34:15.817650
-//+ Revised: 	2026/11/12 09:16:50.160664
+//+ Revised: 	2026/11/14 22:00:10.731851
 // -----------------------------------------------------------------------------
 
 use std::fs;
@@ -17,7 +17,7 @@ pub fn run() -> Result<()> {
         app.resize(width, height)?;
         open_source(&mut app)?;
         let edited = edit_and_undo(&mut app)?;
-        app.click("editor-save")?;
+        editor_action(&mut app, "editor-save")?;
         app.wait_for("saved editor", |state| state["editor_dirty"] == false)?;
         ensure!(
             fs::read_to_string(app.fixture_file("src/main.rs"))? == edited,
@@ -38,6 +38,14 @@ fn open_source(app: &mut AppDriver) -> Result<()> {
         .any(|control| control["id"] == "file:src/main.rs");
     if !visible {
         app.click("folder:src")?;
+        // The folder is listed off the UI thread; its rows appear a frame or more after the click.
+        app.wait_for("expanded src folder", |state| {
+            state["controls"].as_array().is_some_and(|controls| {
+                controls
+                    .iter()
+                    .any(|control| control["id"] == "file:src/main.rs")
+            })
+        })?;
     }
     app.click("file:src/main.rs")?;
     app.wait_for("source editor", |state| {
@@ -61,9 +69,9 @@ fn edit_and_undo(app: &mut AppDriver) -> Result<String> {
         "native edit did not mark document dirty"
     );
     let edited = editor_text(&state)?.to_owned();
-    app.click("editor-undo")?;
+    editor_action(app, "editor-undo")?;
     app.wait_for("editor undo", |state| state["editor_text"] != edited)?;
-    app.click("editor-redo")?;
+    editor_action(app, "editor-redo")?;
     app.wait_for("editor redo", |state| state["editor_text"] == edited)?;
     Ok(edited)
 }
@@ -75,7 +83,7 @@ fn external_conflict(app: &mut AppDriver, width: u32) -> Result<()> {
     app.window.type_text(" local")?;
     let state = app.wait_for("second local edit", |state| state["editor_dirty"] == true)?;
     let local = editor_text(&state)?.to_owned();
-    app.click("editor-save")?;
+    editor_action(app, "editor-save")?;
     let state = app.wait_for("visible external change conflict", |state| {
         state["editor_conflict"] == true
     })?;
@@ -91,7 +99,7 @@ fn external_conflict(app: &mut AppDriver, width: u32) -> Result<()> {
     pixels::assert_real_pixels(&capture)?;
     pixels::assert_visible_controls(&capture, &state)?;
     snapshots::assert_snapshot(&format!("editor-conflict-{width}"), &capture)?;
-    app.click("editor-reload")?;
+    editor_action(app, "editor-reload")?;
     app.wait_for("explicit conflict reload", |state| {
         state["editor_text"] == EXTERNAL
             && state["editor_dirty"] == false
@@ -104,4 +112,16 @@ fn editor_text(state: &Value) -> Result<&str> {
     state["editor_text"]
         .as_str()
         .context("state.editor_text must be a string")
+}
+
+fn editor_action(app: &mut AppDriver, action: &str) -> Result<()> {
+    // An error banner moves the toolbar; wait for its painted position before clicking it.
+    app.window.capture_settled()?;
+    app.click("editor-actions")?;
+    app.wait_for("editor actions menu", |state| {
+        state["controls"]
+            .as_array()
+            .is_some_and(|controls| controls.iter().any(|control| control["id"] == action))
+    })?;
+    app.click(action)
 }

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:29:21.390733
-//+ Revised: 	2026/11/12 09:16:29.957553
+//+ Revised: 	2026/11/13 17:30:08.230236
 // -----------------------------------------------------------------------------
 
 //! ANSI terminal painting backed by a supervised PTY session.
@@ -18,6 +18,7 @@ use gpui::{
 use std::sync::{Arc, Mutex};
 
 pub struct TerminalView {
+    pending_input: Vec<u8>,
     pub session: Arc<Mutex<Session>>,
     pub snapshot: TerminalSnapshot,
     pub focus: FocusHandle,
@@ -41,6 +42,7 @@ impl TerminalView {
             .unwrap_or_else(|poison| poison.into_inner())
             .snapshot();
         Self {
+            pending_input: Vec::new(),
             session,
             snapshot,
             focus: cx.focus_handle(),
@@ -58,6 +60,7 @@ impl TerminalView {
     }
 
     pub fn poll(&mut self, cx: &mut Context<Self>) {
+        self.flush_input(cx);
         let Ok(session) = self.session.try_lock() else {
             return;
         };
@@ -70,11 +73,32 @@ impl TerminalView {
     }
 
     pub fn send(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
-        let result = self
-            .session
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("Session is stopping"))
-            .and_then(|session| session.write(bytes));
+        if self.pending_input.len() + bytes.len() > 65_536 {
+            tracing::warn!("Terminal input buffer is full");
+            self.error = Some("The terminal is catching up. Wait before pasting more text.".into());
+            cx.notify();
+            return;
+        }
+        self.pending_input.extend_from_slice(bytes);
+        self.flush_input(cx);
+    }
+
+    fn flush_input(&mut self, cx: &mut Context<Self>) {
+        if self.pending_input.is_empty() {
+            return;
+        }
+        let result = match self.session.try_lock() {
+            Ok(session) => session.try_write(&self.pending_input),
+            Err(_) => return,
+        };
+        match result {
+            Ok(true) => {
+                self.pending_input.clear();
+                self.error = None;
+            }
+            Ok(false) => return,
+            Err(_) => self.pending_input.clear(),
+        }
         if let Err(error) = result {
             tracing::warn!(%error, "Terminal input failed");
             self.error = Some(

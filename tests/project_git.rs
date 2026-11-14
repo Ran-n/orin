@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:12:37.263702
-//+ Revised: 	2026/11/13 07:53:52.115533
+//+ Revised: 	2026/11/14 01:02:38.181040
 // -----------------------------------------------------------------------------
 
 use std::fs;
@@ -46,6 +46,25 @@ fn repository() -> TempDir {
     git(directory.path(), &["add", "--", "example.rs"]);
     git(directory.path(), &["commit", "-m", "fixture"]);
     directory
+}
+
+#[test]
+fn regression_a_file_in_another_encoding_still_shows_its_diff_and_status() {
+    // One byte that isn't UTF-8 used to fail the whole diff and every status decoration.
+    let directory = repository();
+    let project = Project::open(directory.path()).unwrap();
+    fs::write(directory.path().join("latin1.txt"), b"caf\xe9 before\n").unwrap();
+    git(directory.path(), &["add", "--", "latin1.txt"]);
+    git(directory.path(), &["commit", "-m", "latin-1 file"]);
+    fs::write(directory.path().join("latin1.txt"), b"caf\xe9 after\n").unwrap();
+    let diff = project.git_diff(Path::new("latin1.txt"), false).unwrap();
+    assert!(diff.contains("-caf\u{fffd} before"), "{diff}");
+    assert!(diff.contains("+caf\u{fffd} after"), "{diff}");
+    let status = project.git_status().unwrap().expect("a repository");
+    assert_eq!(
+        status.files.get(Path::new("latin1.txt")),
+        Some(&FileStatus::Modified)
+    );
 }
 
 #[test]

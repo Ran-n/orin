@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:46:34.725792
-//+ Revised: 	2026/11/12 22:43:39.256288
+//+ Revised: 	2026/11/14 01:02:28.767845
 // -----------------------------------------------------------------------------
 
 //! The Code column: the selected file, editable in place, or its unstaged or staged Git diff.
@@ -10,7 +10,7 @@ use super::{
     assets::Icon,
     controls::{ControlSpec, Emphasis, hint, icon},
     file_icons::file_icon,
-    layout::empty_hint,
+    layout::{empty_hint, empty_state},
     theme,
     workspace::Workspace,
 };
@@ -18,87 +18,55 @@ use crate::settings::ViewerMode;
 use gpui::{AnyElement, Context, div, prelude::*, px, rgb};
 
 const DIFF_LINE_HEIGHT: f32 = 19.0;
+/// What the diff views hold once Git answers that the file has no changes of that kind; an
+/// empty text means the answer hasn't arrived yet.
+pub const NO_CHANGES: &str = "No changes in this view.";
 /// The editor tab strip's height.
 const TAB_HEIGHT: f32 = 32.0;
 
 impl Workspace {
     pub fn code_actions(&self, cx: &Context<Self>) -> Vec<AnyElement> {
-        let editor = self.editor.as_ref().map(|editor| editor.read(cx));
         let previewing = self.previewing_markdown();
-        let editing = self.settings.viewer_mode == ViewerMode::File && !previewing;
-        let dirty = editor.is_some_and(|editor| editor.dirty());
-        let saving = editor.is_some_and(|editor| editor.saving);
-        let preview = self.can_preview_markdown().then(|| {
-            ControlSpec::new("markdown-preview-toggle", &self.controls, cx)
-                .enabled(!self.closing)
-                .emphasis(if previewing {
-                    Emphasis::Selected
-                } else {
-                    Emphasis::Normal
-                })
-                .tooltip(if previewing {
-                    "Edit source (Ctrl+Shift+V)"
-                } else {
-                    "Preview Markdown (Ctrl+Shift+V)"
-                })
-                .icon(
-                    if previewing {
-                        Icon::EditSource
+        let mut actions = Vec::new();
+        if self.can_preview_markdown() {
+            actions.push(
+                ControlSpec::new("markdown-preview-toggle", &self.controls, cx)
+                    .enabled(!self.closing)
+                    .emphasis(if previewing {
+                        Emphasis::Selected
                     } else {
-                        Icon::Preview
-                    },
-                    |view, _, cx| view.toggle_markdown_preview(cx),
-                )
-        });
-        preview
-            .into_iter()
-            .chain([
-                ControlSpec::new("editor-undo", &self.controls, cx)
-                    .enabled(
-                        editing
-                            && editor.is_some_and(|editor| editor.buffer().can_undo())
-                            && !self.closing,
-                    )
-                    .tooltip("Undo (Ctrl+Z)")
-                    .icon(Icon::Undo, |view, _, cx| {
-                        if let Some(editor) = &view.editor {
-                            editor.update(cx, |editor, cx| editor.undo(cx));
-                        }
-                    }),
-                ControlSpec::new("editor-redo", &self.controls, cx)
-                    .enabled(
-                        editing
-                            && editor.is_some_and(|editor| editor.buffer().can_redo())
-                            && !self.closing,
-                    )
-                    .tooltip("Redo (Ctrl+Y)")
-                    .icon(Icon::Redo, |view, _, cx| {
-                        if let Some(editor) = &view.editor {
-                            editor.update(cx, |editor, cx| editor.redo(cx));
-                        }
-                    }),
-                ControlSpec::new("editor-reload", &self.controls, cx)
-                    .enabled(self.settings.selected_file.is_some() && !saving && !self.closing)
-                    .tooltip("Reload from disk")
-                    .icon(Icon::Reload, |view, _, cx| view.reload_editor(cx)),
-                ControlSpec::new("editor-save", &self.controls, cx)
-                    .enabled(editing && dirty && !saving && !self.closing)
-                    .emphasis(if dirty {
-                        Emphasis::Primary
-                    } else {
-                        Emphasis::Normal
+                        Emphasis::Ghost
                     })
-                    .tooltip(if saving { "Saving…" } else { "Save (Ctrl+S)" })
-                    .icon(Icon::Save, |view, _, cx| view.save_editor(cx)),
-            ])
-            .collect()
+                    .tooltip(if previewing {
+                        "Edit source (Ctrl+Shift+V)"
+                    } else {
+                        "Preview Markdown (Ctrl+Shift+V)"
+                    })
+                    .icon(
+                        if previewing {
+                            Icon::EditSource
+                        } else {
+                            Icon::Preview
+                        },
+                        |view, _, cx| view.toggle_markdown_preview(cx),
+                    ),
+            );
+        }
+        actions.push(
+            ControlSpec::new("editor-actions", &self.controls, cx)
+                .enabled(self.settings.selected_file.is_some() && !self.closing)
+                .emphasis(Emphasis::Ghost)
+                .tooltip("Editor actions")
+                .icon(Icon::More, |view, window, cx| {
+                    view.toggle_menu(super::menus::Menu::Editor, "editor-actions", window, cx)
+                }),
+        );
+        actions
     }
 
-    pub fn code_pane(&self, cx: &Context<Self>) -> AnyElement {
+    pub fn code_tab(&self, cx: &Context<Self>) -> AnyElement {
         let Some(path) = self.settings.selected_file.as_ref() else {
-            return empty_hint(
-                "Select a file in Files, or open one an agent changed, to read and edit it here.",
-            );
+            return div().flex_1().into_any_element();
         };
         let dirty = self
             .editor
@@ -110,7 +78,9 @@ impl Workspace {
         let tab = theme::row()
             .id("code-path")
             .h(theme::scaled(TAB_HEIGHT))
-            .flex_shrink_0()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
             .pl_3()
             .pr_1()
             .gap_2()
@@ -139,7 +109,10 @@ impl Workspace {
             .child(
                 // The name alone fits narrow columns; the full project path is one hover away.
                 div()
-                    .flex_shrink_0()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .relative()
                     .whitespace_nowrap()
                     .text_size(theme::scaled(theme::SMALL_TEXT))
                     .text_color(rgb(colors.text))
@@ -168,27 +141,26 @@ impl Workspace {
                     })
                     .icon(Icon::Close, |view, _, cx| view.close_file(cx)),
             );
-        // The tab keeps its name; in a narrow column the view switch wraps onto its own line.
-        let path_bar = theme::row()
-            .flex_wrap()
-            .min_h(theme::scaled(TAB_HEIGHT))
-            .flex_shrink_0()
-            .pr_1()
-            .gap_x_2()
-            .bg(rgb(colors.panel))
-            .border_b_1()
-            .border_color(rgb(colors.border))
-            .child(tab)
-            .child(div().flex_1())
-            .child(
-                theme::row()
-                    .h(theme::scaled(TAB_HEIGHT))
-                    .flex_shrink_0()
-                    .child(self.viewer_modes(cx)),
+        tab.into_any_element()
+    }
+
+    pub fn code_pane(&self, cx: &Context<Self>) -> AnyElement {
+        if self.settings.selected_file.is_none() {
+            return empty_state(
+                Icon::Code,
+                "Select a file in Files to view or edit it here.",
             );
+        }
         theme::column()
             .flex_1()
-            .child(path_bar)
+            .child(
+                theme::row()
+                    .h(theme::scaled(28.))
+                    .px_2()
+                    .border_b_1()
+                    .border_color(rgb(theme::colors().border))
+                    .child(self.viewer_modes(cx)),
+            )
             .child(div().flex_1().min_h_0().child(self.code_content(cx)))
             .into_any_element()
     }
@@ -236,7 +208,16 @@ impl Workspace {
             };
         }
         if self.content.is_empty() {
-            return empty_hint("No changes in this view.");
+            return empty_hint("Loading…");
+        }
+        if self.content == NO_CHANGES {
+            return empty_state(
+                Icon::Check,
+                match self.settings.viewer_mode {
+                    ViewerMode::Staged => "This file has no staged changes.",
+                    _ => "This file has no unstaged changes.",
+                },
+            );
         }
         div()
             .id("diff-content")

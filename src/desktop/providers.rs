@@ -1,17 +1,17 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:58:27.525538
-//+ Revised: 	2026/11/13 07:53:51.034948
+//+ Revised: 	2026/11/13 17:30:08.010942
 // -----------------------------------------------------------------------------
 
 //! Provider discovery: each provider is probed on its own thread, all at once.
 
 use crate::agents::{Provider, ProviderStatus};
 
-pub fn probe_all() -> Vec<(Provider, ProviderStatus)> {
+pub fn probe_all_in(path: Option<&std::ffi::OsStr>) -> Vec<(Provider, ProviderStatus)> {
     std::thread::scope(|scope| {
         let probes =
-            Provider::ALL.map(|provider| (provider, scope.spawn(move || provider.probe())));
+            Provider::ALL.map(|provider| (provider, scope.spawn(move || provider.probe_in(path))));
         probes
             .into_iter()
             .map(|(provider, probe)| {

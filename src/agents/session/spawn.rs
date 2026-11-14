@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:52:05.350474
-//+ Revised: 	2026/11/12 15:28:14.583491
+//+ Revised: 	2026/11/13 17:30:06.940655
 // -----------------------------------------------------------------------------
 
 use super::*;
@@ -18,6 +18,20 @@ impl AgentSession {
         // The first start through npx downloads the adapter, which can take minutes.
         let startup = if downloads { DOWNLOAD_STARTUP } else { STARTUP };
         Self::spawn_with(provider, command, cwd, startup)
+    }
+
+    pub fn spawn_in_path(
+        provider: Provider,
+        cwd: &Path,
+        path: Option<&std::ffi::OsStr>,
+    ) -> Result<Self> {
+        let (command, downloads) = provider.command_in(path)?;
+        Self::spawn_with(
+            provider,
+            command,
+            cwd,
+            if downloads { DOWNLOAD_STARTUP } else { STARTUP },
+        )
     }
 
     /// Use a custom ACP command, also useful for entirely offline protocol fixtures.

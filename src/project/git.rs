@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:12:36.609616
-//+ Revised: 	2026/11/13 07:53:51.845513
+//+ Revised: 	2026/11/14 01:02:33.697828
 // -----------------------------------------------------------------------------
 
 //! Git diff and status access without shells, external diff tools, or text converters.
@@ -20,6 +20,8 @@ const MAX_GIT_OUTPUT: u64 = 8 * 1024 * 1024;
 const NO_REPOSITORY_PROGRAMS: [&str; 2] = ["-c", "core.fsmonitor=false"];
 
 fn git_output(command: &mut Command) -> Result<std::process::Output, ProjectError> {
+    // Git translates its messages; "not a git repository" is recognised by its English text.
+    command.env("LC_ALL", "C").env("LANGUAGE", "C");
     crate::process::capture::output(command, GIT_TIMEOUT, MAX_GIT_OUTPUT).map_err(|_| {
         tracing::warn!(target: "orin::project", "Git command could not complete within its resource limits");
         ProjectError::Git("Git could not finish. Check the repository and try again.".into())
@@ -50,7 +52,7 @@ impl Project {
             ));
         }
         tracing::debug!(target: "orin::project", staged, "git diff read");
-        String::from_utf8(output.stdout).map_err(|_| ProjectError::Encoding)
+        Ok(lossy(output.stdout))
     }
 }
 
@@ -226,10 +228,15 @@ impl Project {
             tracing::warn!(target: "orin::project", code = output.status.code(), "git command failed");
             return Err(ProjectError::Git(message));
         }
-        String::from_utf8(output.stdout)
-            .map(Some)
-            .map_err(|_| ProjectError::Encoding)
+        Ok(Some(lossy(output.stdout)))
     }
+}
+
+/// Git's output as text. A file in another encoding, or a name that isn't UTF-8, shows its
+/// unreadable bytes as U+FFFD instead of failing the whole diff or status.
+fn lossy(bytes: Vec<u8>) -> String {
+    String::from_utf8(bytes)
+        .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned())
 }
 
 #[cfg(test)]

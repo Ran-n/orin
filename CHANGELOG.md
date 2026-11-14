@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.826510 )
-[//]: # (+ Revised: 	2026/11/13 16:19:59.805719 )
+[//]: # (+ Revised: 	2026/11/14 22:00:10.655974 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -12,6 +12,55 @@ All notable changes to Orin will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+### Added
+
+- Added a Close Folder button, and made the Orin logo and title bar box close the current folder and return to Welcome
+- Added saved agent tool folders and per-agent setup links in Settings › Agent accounts
+- Added Claude, OpenAI, and Gemini logos to agent tabs, launchers, and setup cards
+- Added an editor "…" menu holding Save, Undo, Redo, and Reload from disk
+- Added formatted agent replies: Markdown with headings, lists, links, and coloured code blocks
+- Added the agent's plan as a checklist pinned above the message box
+- Added the command and files an approval request names to its panel, with paths shown relative to the project
+- Added launch buttons for each agent in the empty Agents column, with Set up agents when one can't start
+- Added an Install guide button on the account card of an agent whose CLI is missing
+- Added signed releases: each asset has a `.sig` made with `orin-sign`, and the updater installs only what a release key signed
+- Added a backup release key, so a lost or stolen signing key can be replaced without stranding installed copies
+- Added build provenance attestations to release builds, checked before a release is signed
+
+### Changed
+
+- Changed file and agent tabs to a flat, VS Code-style look and removed the redundant Code and Agents headings
+- Changed agent discovery to also search standard user installations and Windows' current user and machine paths
+- Changed conversations to show tool calls where they happened, each with a status mark, instead of the last four below the reply
+- Changed the message box to wrap long lines, grow with its text, use the interface font, and show Stop in place of Send while the agent works
+- Changed Open Folder on Welcome to a prominent button
+- Changed model, effort, mode, and font pickers to show their value followed by a chevron
+- Changed empty columns to a centred icon and hint, and an empty diff to say which changes are absent
+- Changed Settings › Accounts to list tool folders in their own section
+- Changed Home and End in the message box to move within the wrapped row the caret is on
+- Changed the Orin logo to fill its space: larger in the title bar, on Welcome, in the empty Agents column, and as the Windows icon
+
+### Fixed
+
+- Fixed Recent folders not opening while the automatically started shell was running
+- Fixed the installed app not finding agent CLIs when launched from Explorer or the Start menu
+- Fixed terminal input dropping characters when its input queue was full
+- Fixed one malformed agent update ending the whole session
+- Fixed an agent's plan being appended to its reasoning again on every update
+- Fixed a file in another encoding hiding its Git diff and every Git decoration
+- Fixed a non-repository folder reporting a Git error when Git answers in another language
+- Fixed a file deleted while its folder was listed failing the whole folder
+- Fixed quitting waiting without limit on a background job blocked by an unreachable folder
+- Fixed a program that floods terminal queries without reading the answers growing memory without limit
+- Fixed long conversations being copied and re-measured on every poll and streamed chunk
+- Fixed the message box and the editor not scrolling to keep the caret in view
+- Fixed a second Orin window deleting the update another window was still downloading
+- Fixed stopping a session on Linux and macOS being able to signal an unrelated process that reused its process id
+
+### Security
+
+- Updates are refused unless signed with one of Orin's release keys for that exact version and file, so a forge account or download host alone can no longer deliver a build
 
 ## [0.2.0] - 2026-11-13
 

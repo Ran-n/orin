@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:35:20.918026
-//+ Revised: 	2026/11/12 10:31:34.358488
+//+ Revised: 	2026/11/14 01:02:24.476933
 // -----------------------------------------------------------------------------
 
 //! ACP v1 sessions: structured conversations over owned local subprocesses.
@@ -21,7 +21,7 @@ mod updates;
 
 pub use model::{
     AgentMessage, AgentSnapshot, AgentStatus, AuthMethod, MessageRole, PendingPermission,
-    PermissionOption, ToolCall,
+    PermissionOption, PlanEntry, ToolCall,
 };
 pub use options::{ConfigChoice, ConfigOption};
 pub use provider::{Provider, ProviderStatus};

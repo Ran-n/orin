@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:37.403166
-//+ Revised: 	2026/11/12 22:43:37.403166
+//+ Revised: 	2026/11/14 12:09:04.062863
 // -----------------------------------------------------------------------------
 
 //! Which release build this binary is, and what its file is called in a release.
@@ -65,6 +65,11 @@ pub fn checksum_name(asset: &str) -> String {
     format!("{asset}.b3")
 }
 
+/// The signature file published next to `asset`, made with `orin-sign`.
+pub fn signature_name(asset: &str) -> String {
+    format!("{asset}.sig")
+}
+
 /// The running version, from `Cargo.toml`.
 pub fn current_version() -> semver::Version {
     semver::Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo.toml holds a semver version")
@@ -90,6 +95,7 @@ mod tests {
             ]
         );
         assert_eq!(checksum_name(&names[1]), "orin-0.2.0-linux-x86_64.b3");
+        assert_eq!(signature_name(&names[1]), "orin-0.2.0-linux-x86_64.sig");
     }
 
     #[test]

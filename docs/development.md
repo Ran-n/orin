@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:34.092613 )
-[//]: # (+ Revised: 	2026/11/13 15:58:36.457667 )
+[//]: # (+ Revised: 	2026/11/14 21:46:04.829480 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -28,7 +28,7 @@ orin/
 │   ├── editor/             Text buffers, undo history, and save checkpoints
 │   ├── settings/           Versioned workspace settings (schema 2: column layout, page, recent folders, agent choices, update choices), migrations, atomic saves
 │   ├── update/             Self-updating: release target and asset names, GitHub/GitLab release check, verified download, install and restart
-│   ├── bin/                Small helper binaries (`orin-asset-name`, used by the release workflow)
+│   ├── bin/                Small helper binaries (`orin-asset-name`, used by the release workflow; `orin-sign`, which signs release assets)
 │   ├── process/            Child-process launch and process-tree cleanup per platform
 │   ├── background.rs       Bounded worker pool for disk and process work
 │   ├── sharing.rs          Retries for transient Windows file-sharing conflicts
@@ -42,7 +42,7 @@ orin/
 │   └── rendered/           Native UI driver, screen capture, and reviewed baselines
 ├── assets/
 │   ├── branding/orin-mascot.png  Logo and mascot, embedded and resampled for each display scale
-│   └── icons/              Lucide interface icons (ISC license, LICENSE alongside)
+│   └── icons/              Lucide interface icons (ISC) and Lobe Icons agent logos (MIT); both licenses in LICENSE
 ├── docs/                   Vision, user guide, this guide, and design decisions
 ├── .github/workflows/      CI for Windows, Linux, and macOS, and the tag-triggered release build
 ├── build.rs                Embeds the mascot as the Windows executable icon (title bar, taskbar, Alt+Tab)
@@ -86,6 +86,10 @@ Redirect standard error to a file when collecting diagnostics (for example, `ori
 `.env.example` lists the optional environment variables; Orin does not load it automatically.
 `PATH` locates Git, agent CLIs and adapters. The terminal uses `ComSpec` on Windows and `SHELL` on Unix,
 with a system shell fallback. Those variables are managed by your operating system and shell.
+Agent discovery also searches saved tool folders, standard user installations, and Windows' current user and machine
+environment paths, so launching from Explorer does not depend on its older environment snapshot.
+Settings › Accounts provides each missing agent's installation guide and **Add tool folder…**; these folders are saved as `tool_directories`
+and passed to agent, account-check, and newly started terminal processes without changing the system environment.
 `GEMINI_API_KEY` and `GOOGLE_API_KEY` are checked for presence to report Gemini sign-in; their values are not saved.
 
 ## Tests
@@ -113,7 +117,10 @@ CI runs `cargo audit` against the lockfile. The pinned GPUI 0.2.2 tree currently
 and `git2` soundness advisories through `gpui_util`; no advisory is suppressed. These upstream constraints
 need rechecking when GPUI changes. `cargo upgrade --dry-run --locked` checks direct dependency versions without editing them.
 
-Git reads have a 15-second deadline and an 8 MiB limit per output stream. Account checks have a 20-second deadline
+Git reads have a 15-second deadline and an 8 MiB limit per output stream; Git runs with `LC_ALL=C`, and bytes that
+aren't UTF-8 in a diff or a file name are shown as U+FFFD rather than failing the read.
+Quitting drops queued background jobs and waits at most 5 seconds for running ones.
+A malformed agent update is logged and skipped; only a reached conversation limit ends a session. Account checks have a 20-second deadline
 and a 1 MiB limit per stream. Both supervise and stop their child processes and descendants on completion or failure.
 Undo history retains at most 10,000 records and 8 MiB of edit text (keeping the most recent edit).
 Settings saves enforce the same 1 MiB serialized-file limit as loads, preserving the last readable file on refusal.
@@ -202,7 +209,7 @@ Record changes under **Unreleased** in [CHANGELOG.md](../CHANGELOG.md), in the s
 
 ## Releases
 
-A release includes a Windows installer and one portable binary per target, each with a BLAKE3 checksum. Orin's updater downloads the portable binary
+A release includes a Windows installer and one portable binary per target, each with a BLAKE3 checksum and a signature. Orin's updater downloads the portable binary
 ([ADR-009](design-decisions.md#adr-009-self-updating-portable-binaries)):
 
 | Runner | Target | Asset |
@@ -212,7 +219,9 @@ A release includes a Windows installer and one portable binary per target, each 
 | `ubuntu-24.04` | `linux-x86_64` | `orin-<version>-linux-x86_64` |
 | `macos-latest` | `macos-aarch64` | `orin-<version>-macos-aarch64` |
 
-Next to each asset is `<asset>.b3`, one `b3sum` line. The names come from `update::target::asset_name`;
+Next to each asset is `<asset>.b3`, one `b3sum` line, and `<asset>.sig`, its signature by the release key
+(see [ADR-009](design-decisions.md#adr-009-self-updating-portable-binaries)). The updater installs nothing without a
+valid `.sig`. The names come from `update::target::asset_name`;
 the workflow asks `cargo run --bin orin-asset-name -- <target>` instead of spelling them out.
 
 To build the Windows installer locally, install [Inno Setup 6](https://jrsoftware.org/isinfo.php),
@@ -227,13 +236,40 @@ The Windows release job runs the same test before uploading the installer.
 
 Release builds are compiled with `ORIN_RELEASE_TARGET=<target>`. Without it (`cargo run`, `cargo build`) the binary is a
 build from source: it never checks for or installs updates. Debug builds also read `ORIN_RELEASE_TARGET`,
-`ORIN_UPDATE_SOURCES=<github-url>|<gitlab-url>` and `ORIN_UPDATE_DIR` at run time for tests; release builds ignore them.
+`ORIN_UPDATE_SOURCES=<github-url>|<gitlab-url>`, `ORIN_UPDATE_KEY=<public key>` and `ORIN_UPDATE_DIR` at run time for
+tests; release builds ignore them.
+
+Orin trusts two release keys, `RELEASE_KEYS` in `src/update/signature.rs`: the first signs every release, the second
+is a backup. A secret key is one line of hex and belongs in a password manager, never in the repository or a plain
+file: the signing key in the KeePass database used for releases, the backup somewhere separate (another database, or
+offline), so one loss or theft never takes both. Shipped builds only install what one of these keys signed.
+
+`orin-sign` (`cargo run --no-default-features --bin orin-sign --`) has four commands: `keygen <secret-file>` makes a
+key and prints its public half (it never overwrites a file), `public <secret-file>` prints it again,
+`sign <secret-file> <asset>...` writes each `<asset>.sig`, and `verify <asset>...` checks each against `RELEASE_KEYS`.
+`<secret-file>` may be `-` to read the key from standard input, which is how a release is signed:
+
+```sh
+keepassxc-cli show -s -a Password <database.kdbx> "Orin release key" \
+  | cargo run --no-default-features --bin orin-sign -- sign - <asset>...
+```
+
+Assets are signed as the checkout's version, so sign from the tag.
+
+If the signing key is lost or stolen: sign the next release with the backup key, and in that release replace
+`RELEASE_KEYS` with the backup and a newly generated key. Everyone who installs it stops trusting the old key. Until
+they do, a stolen key can still sign for them, so ship that release at once.
 
 1. Promote **Unreleased** in the changelog to `## [X.Y.Z]` and set `version` in `Cargo.toml` to the same number.
 2. Push the tag `vX.Y.Z`. [`release.yml`](../.github/workflows/release.yml) fails at once if the tag and `Cargo.toml`
    disagree, then builds the three targets and Windows installer and creates a **draft** GitHub release with the eight files and that version's
    changelog section.
-3. Download the draft's files and check every one with `b3sum --check <asset>.b3`.
-4. Attach the same eight files to the GitLab release (`glab release create vX.Y.Z <files>`) and the Codeberg release.
-   GitLab must have every asset and `.b3`: the updater falls back to it when GitHub can't answer.
-5. Publish the GitHub draft. Orin's update check only sees published, non-pre-release releases.
+3. Download the draft's files and check every one with `b3sum --check <asset>.b3`, then check that each asset is the
+   one the release workflow built from this tag: `gh attestation verify <asset> --repo Ran-n/orin`. Sign nothing that
+   fails either check.
+4. From the tag's checkout, sign the four assets (not the `.b3` files) with the key piped from KeePassXC as shown
+   above, check them with `orin-sign verify <asset>...`, and add the four `.sig` files to the draft
+   (`gh release upload vX.Y.Z *.sig`).
+5. Attach the same twelve files to the GitLab release (`glab release create vX.Y.Z <files>`) and the Codeberg release.
+   GitLab must have every asset, `.b3` and `.sig`: the updater falls back to it when GitHub can't answer.
+6. Publish the GitHub draft. Orin's update check only sees published, non-pre-release releases.

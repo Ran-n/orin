@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:28:14.881191
-//+ Revised: 	2026/11/13 08:33:02.602556
+//+ Revised: 	2026/11/14 01:02:30.739137
 // -----------------------------------------------------------------------------
 
 //! Apply completed operations on the GPUI thread, rejecting stale file results.
@@ -13,6 +13,15 @@ use std::path::PathBuf;
 impl Workspace {
     pub fn apply_event(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            Event::ProjectClosed { generation, result }
+                if generation == self.project_generation =>
+            {
+                self.loading = false;
+                if let Err(error) = result {
+                    tracing::error!(%error, "Project cleanup failed");
+                    self.error = Some("The previous sessions could not stop cleanly. Close Orin before starting more work.".into());
+                }
+            }
             Event::Project { generation, result } if generation == self.project_generation => {
                 self.loading = false;
                 match result {
@@ -124,7 +133,7 @@ impl Workspace {
                 match result {
                     Ok(diff) => {
                         self.content = if diff.is_empty() {
-                            "No changes in this view.".into()
+                            super::code_layout::NO_CHANGES.into()
                         } else {
                             diff
                         }
@@ -135,7 +144,7 @@ impl Workspace {
                     }
                 }
             }
-            Event::Providers(providers) => {
+            Event::Providers { path, providers } if path == self.account_environment.path => {
                 self.providers = providers;
                 if let Some(path) = self.test_agent.clone() {
                     for (provider, status) in &mut self.providers {
@@ -151,7 +160,14 @@ impl Workspace {
                 result,
             } => self.agent_ready(generation, provider, result, window, cx),
             Event::Shell { generation, result } => self.shell_ready(generation, result, window, cx),
-            Event::Accounts(accounts) => self.accounts_checked(accounts, cx),
+            Event::Accounts { path, accounts } => {
+                if path == self.account_environment.path {
+                    self.accounts_checked(accounts, cx);
+                } else {
+                    self.accounts_checking = false;
+                    self.refresh_accounts(cx);
+                }
+            }
             Event::FileSaved { generation, result } if generation == self.document_generation => {
                 match result {
                     Ok(file) => {

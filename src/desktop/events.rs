@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:26:59.738569
-//+ Revised: 	2026/11/13 07:53:51.430942
+//+ Revised: 	2026/11/13 17:30:07.679171
 // -----------------------------------------------------------------------------
 
 //! Messages crossing from bounded IO workers to the GPUI thread.
@@ -21,6 +21,10 @@ pub type ProjectLoad = (
 );
 
 pub enum Event {
+    ProjectClosed {
+        generation: u64,
+        result: std::io::Result<()>,
+    },
     Project {
         generation: u64,
         result: Result<ProjectLoad, ProjectError>,
@@ -38,8 +42,14 @@ pub enum Event {
         generation: u64,
         result: Result<String, ProjectError>,
     },
-    Providers(Vec<(Provider, ProviderStatus)>),
-    Accounts(Vec<Account>),
+    Providers {
+        path: Option<std::ffi::OsString>,
+        providers: Vec<(Provider, ProviderStatus)>,
+    },
+    Accounts {
+        path: Option<std::ffi::OsString>,
+        accounts: Vec<Account>,
+    },
     Agent {
         generation: u64,
         provider: Provider,

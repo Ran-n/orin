@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:46:34.369798
-//+ Revised: 	2026/11/13 07:53:50.902689
+//+ Revised: 	2026/11/14 01:02:30.947253
 // -----------------------------------------------------------------------------
 
 //! Window framing: title bar, the four workspace columns side by side, and the status bar.
@@ -113,7 +113,7 @@ impl Workspace {
         let logo = theme::row()
             .id("open-welcome")
             .relative()
-            .h(theme::scaled(26.))
+            .h(theme::scaled(28.))
             .px_2()
             .gap_2()
             .rounded(theme::scaled(theme::RADIUS))
@@ -121,8 +121,8 @@ impl Workspace {
             .hover(|style| style.bg(rgb(theme::colors().hover)))
             .tooltip(hint("Welcome"))
             .child(
-                img(assets::mascot(self.device_pixels(theme::metric(18.))))
-                    .size(theme::scaled(18.)),
+                img(assets::mascot(self.device_pixels(theme::metric(LOGO_SIZE))))
+                    .size(theme::scaled(LOGO_SIZE)),
             )
             .child(div().text_color(rgb(colors.text)).child("Orin"))
             .child(measured("open-welcome", !self.closing, &self.controls))
@@ -187,6 +187,17 @@ impl Workspace {
                     .items_center()
                     .justify_end()
                     .gap_1()
+                    .children(self.project.as_ref().map(|_| {
+                        ControlSpec::new("close-project", &self.controls, cx)
+                            .enabled(self.can_open_project(cx))
+                            .tooltip(
+                                self.project_switch_blocked(cx)
+                                    .unwrap_or("Close Folder and return to Welcome"),
+                            )
+                            .icon_text(Icon::Close, "Close Folder", |view, _, cx| {
+                                view.close_project(cx)
+                            })
+                    }))
                     .child(
                         ControlSpec::new("open-project", &self.controls, cx)
                             .enabled(self.can_open_project(cx))
@@ -357,11 +368,14 @@ impl Workspace {
                 .bg(rgb(theme::colors().background))
                 .child(tab.view.clone())
                 .into_any_element(),
-            None => empty_hint(if self.project.is_some() {
-                "Start a shell to run tests, inspect your environment, or build the project."
-            } else {
-                "Open a project to start a shell in its folder."
-            }),
+            None => empty_state(
+                Icon::Terminal,
+                if self.project.is_some() {
+                    "Start a shell to run tests, inspect your environment, or build the project."
+                } else {
+                    "Open a project to start a shell in its folder."
+                },
+            ),
         }
     }
 
@@ -448,6 +462,34 @@ pub fn empty_hint(text: &'static str) -> AnyElement {
         .child(text)
         .into_any_element()
 }
+
+/// An empty column: its icon and a sentence saying what goes here, centred where the content
+/// will be.
+pub fn empty_state(glyph: Icon, text: &'static str) -> AnyElement {
+    theme::column()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .p_4()
+        .gap_3()
+        .child(icon(glyph, theme::colors().faint).size(theme::scaled(EMPTY_ICON_SIZE)))
+        .child(
+            div()
+                .max_w(theme::scaled(260.))
+                .text_size(theme::scaled(theme::SMALL_TEXT))
+                .text_color(rgb(theme::colors().muted))
+                .whitespace_normal()
+                .text_center()
+                .child(text),
+        )
+        .into_any_element()
+}
+
+/// The icon of an empty column, large enough to read as an illustration.
+const EMPTY_ICON_SIZE: f32 = 28.0;
+
+/// The title bar's logo, in logical pixels: as tall as the bar allows with room for its hover box.
+const LOGO_SIZE: f32 = 24.0;
 
 /// The single main action of an empty area, given its own prominent row.
 pub fn primary_action<T: 'static>(

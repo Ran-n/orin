@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:39:10.329295
-//+ Revised: 	2026/11/13 07:53:53.225744
+//+ Revised: 	2026/11/14 12:09:13.486754
 // -----------------------------------------------------------------------------
 
 //! Text shaping, line numbers, selection, and caret share the same native geometry.
@@ -42,8 +42,63 @@ impl Geometry {
 pub struct EditorLine {
     pub offset: usize,
     pub len: usize,
+    /// A file's line, shaped while it is on screen. Files are never wrapped.
     pub shaped: Option<gpui::ShapedLine>,
+    /// A prompt's line, wrapped to the width of its box.
+    pub wrapped: Option<gpui::WrappedLine>,
+    /// The drawn row this line starts on, counting wrapped rows above it.
+    pub row: usize,
+    /// How many drawn rows the line takes: one unless it wraps.
+    pub rows: usize,
 }
+
+impl EditorLine {
+    /// The byte ranges of this line's drawn rows, relative to the line.
+    pub fn row_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        let mut start = 0;
+        // An unwrapped line has no boundaries: it is one row, its whole length.
+        let mut ranges: Vec<_> = self
+            .wrapped
+            .iter()
+            .flat_map(|wrapped| {
+                wrapped
+                    .wrap_boundaries()
+                    .iter()
+                    .map(move |boundary| (wrapped, boundary))
+            })
+            .map(|(wrapped, boundary)| {
+                let end =
+                    wrapped.unwrapped_layout.runs[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+                let range = start..end;
+                start = end;
+                range
+            })
+            .collect();
+        ranges.push(start..self.len);
+        ranges
+    }
+
+    /// Where the caret at `index` of a wrapped line is drawn: its row within the line and its
+    /// distance from the row's left edge. `None` for a line that isn't wrapped (a file's).
+    ///
+    /// Where the line breaks, `index` ends one row and starts the next; `row_start` picks the
+    /// next row, otherwise the caret stays at the end of the earlier one.
+    pub fn caret_place(&self, index: usize, row_start: bool) -> Option<(usize, Pixels)> {
+        let layout = &self.wrapped.as_ref()?.unwrapped_layout;
+        let ranges = self.row_ranges();
+        let mut row = ranges.iter().position(|range| index <= range.end)?;
+        if row_start && index == ranges[row].end && row + 1 < ranges.len() {
+            row += 1;
+        }
+        Some((
+            row,
+            layout.x_for_index(index) - layout.x_for_index(ranges[row].start),
+        ))
+    }
+}
+
+/// The narrowest a prompt's text is wrapped to, however small its box.
+const MIN_WRAP_WIDTH: f32 = 40.0;
 
 pub fn text_canvas(entity: Entity<TextEditor>) -> impl IntoElement + gpui::Styled {
     canvas(
@@ -58,6 +113,12 @@ pub fn text_canvas(entity: Entity<TextEditor>) -> impl IntoElement + gpui::Style
                     .map(|line| line.trim_end_matches('\r'))
                     .collect();
                 let geometry = Geometry::current(view.document().is_some());
+                // A prompt wraps at the width of its box; a file scrolls sideways instead.
+                let wrap_width = view
+                    .document()
+                    .is_none()
+                    .then(|| (bounds.size.width - px(2. * geometry.left)).max(px(MIN_WRAP_WIDTH)));
+                let mut row = 0;
                 // Highlight only down to the last line on screen; the rest is drawn later.
                 let shown = ((f32::from(window.viewport_size().height - bounds.top())
                     - geometry.top)
@@ -79,24 +140,47 @@ pub fn text_canvas(entity: Entity<TextEditor>) -> impl IntoElement + gpui::Style
                         tokens.get(index).copied().unwrap_or_default(),
                         &style.font(),
                     );
-                    let shaped = visible.contains(&index).then(|| {
-                        window.text_system().shape_line(
-                            (*line).to_owned().into(),
-                            theme::scaled(theme::CODE_TEXT),
-                            &runs,
+                    let (shaped, wrapped) = match wrap_width {
+                        Some(width) => (None, wrap_line(line, &runs, width, window)),
+                        None => (
+                            visible.contains(&index).then(|| {
+                                window.text_system().shape_line(
+                                    (*line).to_owned().into(),
+                                    theme::scaled(theme::CODE_TEXT),
+                                    &runs,
+                                    None,
+                                )
+                            }),
                             None,
-                        )
-                    });
+                        ),
+                    };
+                    let rows = wrapped
+                        .as_ref()
+                        .map_or(1, |wrapped| wrapped.wrap_boundaries().len() + 1);
                     lines.push(EditorLine {
                         offset,
                         len: line.len(),
                         shaped,
+                        wrapped,
+                        row,
+                        rows,
                     });
+                    row += rows;
                     offset += raw.len() + 1;
                 }
                 view.bounds = Some(bounds);
                 view.lines = lines;
-                let _ = cx;
+                // The caret's place is known only now; when it moved out of view, scroll to it
+                // and draw again.
+                if view.reveal_caret() {
+                    cx.notify();
+                }
+                // The box around a prompt is sized by its drawn rows, known only now: draw
+                // again when wrapping changed how many there are.
+                if view.visual_rows != row {
+                    view.visual_rows = row;
+                    cx.notify();
+                }
             });
             entity
         },
@@ -108,17 +192,25 @@ pub fn text_canvas(entity: Entity<TextEditor>) -> impl IntoElement + gpui::Style
                 window.handle_input(&view.focus, ElementInputHandler::new(bounds, input), cx);
                 let selection = view.buffer().selection();
                 for (index, entry) in view.lines.iter().enumerate() {
+                    let origin = point(
+                        bounds.left() + px(geometry.left),
+                        bounds.top() + px(geometry.top + entry.row as f32 * geometry.line),
+                    );
+                    if origin.y + line_height * (entry.rows as f32) < px(0.)
+                        || origin.y > window.viewport_size().height
+                    {
+                        continue;
+                    }
+                    if let Some(wrapped) = &entry.wrapped {
+                        let caret = (selection.is_empty() && view.focus.is_focused(window))
+                            .then_some((selection.end, view.row_start));
+                        paint_wrapped(entry, wrapped, origin, &selection, caret, window, cx);
+                        continue;
+                    }
                     let Some(line) = &entry.shaped else {
                         continue;
                     };
                     let offset = &entry.offset;
-                    let origin = point(
-                        bounds.left() + px(geometry.left),
-                        bounds.top() + px(geometry.top + index as f32 * geometry.line),
-                    );
-                    if origin.y + line_height < px(0.) || origin.y > window.viewport_size().height {
-                        continue;
-                    }
                     paint_selection(
                         bounds,
                         origin,
@@ -168,6 +260,80 @@ pub fn text_canvas(entity: Entity<TextEditor>) -> impl IntoElement + gpui::Style
             });
         },
     )
+}
+
+/// `line` wrapped to `width`. A line that can't be shaped is logged and left undrawn rather
+/// than taking the editor down.
+fn wrap_line(
+    line: &str,
+    runs: &[TextRun],
+    width: Pixels,
+    window: &mut gpui::Window,
+) -> Option<gpui::WrappedLine> {
+    match window.text_system().shape_text(
+        line.to_owned().into(),
+        theme::scaled(theme::CODE_TEXT),
+        runs,
+        Some(width),
+        None,
+    ) {
+        Ok(mut lines) if !lines.is_empty() => Some(lines.swap_remove(0)),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::warn!(%error, "Prompt line could not be wrapped");
+            None
+        }
+    }
+}
+
+/// One wrapped prompt line: its selection row by row, its text, and the caret when it is here.
+fn paint_wrapped(
+    entry: &EditorLine,
+    wrapped: &gpui::WrappedLine,
+    origin: gpui::Point<Pixels>,
+    selection: &std::ops::Range<usize>,
+    // The caret's offset and whether it sits at the start of a row (see `caret_place`).
+    caret: Option<(usize, bool)>,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) {
+    let line_height = px(Geometry::current(false).line);
+    let layout = &wrapped.unwrapped_layout;
+    for (row, range) in entry.row_ranges().into_iter().enumerate() {
+        let start = selection
+            .start
+            .saturating_sub(entry.offset)
+            .max(range.start);
+        let end = selection.end.saturating_sub(entry.offset).min(range.end);
+        if selection.start >= entry.offset + range.end || start >= end {
+            continue;
+        }
+        let left = layout.x_for_index(range.start);
+        let top = origin.y + line_height * row as f32;
+        window.paint_quad(fill(
+            Bounds::from_corners(
+                point(origin.x + layout.x_for_index(start) - left, top),
+                point(origin.x + layout.x_for_index(end) - left, top + line_height),
+            ),
+            rgba(theme::colors().selection),
+        ));
+    }
+    if let Err(error) = wrapped.paint(origin, line_height, gpui::TextAlign::Left, None, window, cx)
+    {
+        tracing::warn!(%error, "Prompt line could not be painted");
+    }
+    let place = caret
+        .filter(|(caret, _)| (entry.offset..=entry.offset + entry.len).contains(caret))
+        .and_then(|(caret, row_start)| entry.caret_place(caret - entry.offset, row_start));
+    if let Some((row, x)) = place {
+        window.paint_quad(fill(
+            Bounds::new(
+                point(origin.x + x, origin.y + line_height * row as f32),
+                size(px(1.5), theme::scaled(theme::CARET_HEIGHT)),
+            ),
+            rgb(theme::colors().accent),
+        ));
+    }
 }
 
 /// Text runs for one line: plain text in the theme's text colour, tokens in their code colours,
@@ -242,7 +408,14 @@ fn paint_number(
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) {
-    paint_label(number.to_string(), origin, line_height, window, cx);
+    paint_label(
+        number.to_string(),
+        theme::LINE_NUMBER_TEXT,
+        origin,
+        line_height,
+        window,
+        cx,
+    );
 }
 
 fn paint_placeholder(
@@ -253,6 +426,7 @@ fn paint_placeholder(
 ) {
     paint_label(
         "Give this agent an intention…".into(),
+        theme::CODE_TEXT,
         origin,
         line_height,
         window,
@@ -262,6 +436,7 @@ fn paint_placeholder(
 
 fn paint_label(
     text: String,
+    size: f32,
     origin: gpui::Point<Pixels>,
     line_height: Pixels,
     window: &mut gpui::Window,
@@ -277,12 +452,7 @@ fn paint_label(
     };
     if let Err(error) = window
         .text_system()
-        .shape_line(
-            text.into(),
-            theme::scaled(theme::LINE_NUMBER_TEXT),
-            &[run],
-            None,
-        )
+        .shape_line(text.into(), theme::scaled(size), &[run], None)
         .paint(origin, line_height, window, cx)
     {
         tracing::warn!(%error,"Editor label could not be painted");

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:39:09.448204
-//+ Revised: 	2026/11/13 07:53:53.938409
+//+ Revised: 	2026/11/14 12:09:13.361465
 // -----------------------------------------------------------------------------
 
 //! A native multiline editor reused by files and agent prompt drafts.
@@ -21,8 +21,8 @@ use crate::{
     project::FileContent,
 };
 use gpui::{
-    Bounds, Context, EventEmitter, FocusHandle, MouseButton, Pixels, Window, div, prelude::*, px,
-    rgb,
+    Bounds, Context, EventEmitter, FocusHandle, MouseButton, Pixels, ScrollHandle, Window, div,
+    prelude::*, px, rgb,
 };
 use std::ops::Range;
 
@@ -53,6 +53,18 @@ pub struct TextEditor {
     pub selection_reversed: bool,
     /// Colours code by language; `None` for prompts and unknown file types.
     pub highlighter: Option<super::syntax::Highlighter>,
+    /// How many rows the text takes as drawn at the last layout: its lines, plus the extra
+    /// rows of a prompt's wrapped lines.
+    pub visual_rows: usize,
+    /// The editor's own scrolling, moved to keep the caret in view.
+    pub scroll: ScrollHandle,
+    /// The caret position last brought into view; scrolling follows the caret only when it
+    /// moves, so the wheel can look elsewhere in between.
+    pub shown_caret: Option<usize>,
+    /// Where a wrapped line breaks, one offset is both the end of a row and the start of the
+    /// next. Set when the caret was put at the start of a row (Home, a click, moving up or
+    /// down), so it is drawn there and not at the end of the row above.
+    pub row_start: bool,
 }
 
 impl TextEditor {
@@ -91,6 +103,10 @@ impl TextEditor {
             dragging: false,
             selection_reversed: false,
             highlighter: None,
+            visual_rows: 1,
+            scroll: ScrollHandle::new(),
+            shown_caret: None,
+            row_start: false,
         }
     }
     pub fn buffer(&self) -> &EditorBuffer {
@@ -116,11 +132,13 @@ impl TextEditor {
     }
     pub fn undo(&mut self, cx: &mut Context<Self>) {
         self.buffer_mut().undo();
+        self.row_start = false;
         self.marked = None;
         cx.notify();
     }
     pub fn redo(&mut self, cx: &mut Context<Self>) {
         self.buffer_mut().redo();
+        self.row_start = false;
         self.marked = None;
         cx.notify();
     }
@@ -146,6 +164,7 @@ impl TextEditor {
             return Err(error);
         }
         self.selection_reversed = false;
+        self.row_start = false;
         self.error = None;
         cx.notify();
         Ok(())
@@ -155,6 +174,7 @@ impl TextEditor {
             tracing::warn!(%error, "Text selection refused");
         }
         self.selection_reversed = false;
+        self.row_start = false;
         cx.notify();
     }
     pub fn accept_saved(&mut self, file: FileContent, cx: &mut Context<Self>) {
@@ -178,9 +198,20 @@ impl EventEmitter<EditorAction> for TextEditor {}
 impl Render for TextEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text = self.buffer().text();
-        let height = (text.lines().count().max(1) as f32 * theme::metric(theme::CODE_LINE)
-            + theme::metric(48.))
-        .max(theme::metric(110.));
+        let prompt = self.document().is_none();
+        let rows = if prompt {
+            self.visual_rows.max(1)
+        } else {
+            text.split('\n').count()
+        } as f32
+            * theme::metric(theme::CODE_LINE);
+        // A file keeps room to click below its last line; a prompt is exactly its text, so a
+        // short draft never scrolls inside its box.
+        let height = if prompt {
+            rows + 2. * theme::metric(theme::CODE_PADDING)
+        } else {
+            (rows + theme::metric(48.)).max(theme::metric(110.))
+        };
         let width = (text
             .lines()
             .map(|line| line.chars().count())
@@ -195,8 +226,13 @@ impl Render for TextEditor {
             .relative()
             .size_full()
             .min_h_0()
-            .bg(rgb(theme::colors().background))
-            .font_family(theme::code_font())
+            .when(!prompt, |editor| editor.bg(rgb(theme::colors().background)))
+            // A prompt is a message to an agent, written in the interface font like the replies.
+            .font_family(if prompt {
+                theme::interface_font()
+            } else {
+                theme::code_font()
+            })
             .text_size(theme::scaled(theme::CODE_TEXT))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
@@ -211,13 +247,20 @@ impl Render for TextEditor {
                     .id(gpui::SharedString::from(format!("{}-scroll", self.id)))
                     .size_full()
                     .overflow_scroll()
-                    .child(
+                    .track_scroll(&self.scroll)
+                    .child(if prompt {
+                        // A prompt wraps, so it is exactly as wide as its box.
+                        paint::text_canvas(entity)
+                            .w_full()
+                            .h(px(height))
+                            .min_h_full()
+                    } else {
                         paint::text_canvas(entity)
                             .w(px(width))
                             .min_w_full()
                             .h(px(height))
-                            .min_h_full(),
-                    ),
+                            .min_h_full()
+                    }),
             )
             .child(controls::measured(self.id.clone(), true, &self.controls))
             .children(self.error.clone().map(|error| {

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:50:00.412454
-//+ Revised: 	2026/11/13 16:19:59.736479
+//+ Revised: 	2026/11/14 01:02:26.295367
 // -----------------------------------------------------------------------------
 
 use super::{AgentSnapshot, AgentStatus, Provider, permissions, protocol, transport, updates};
@@ -130,7 +130,29 @@ fn unit_updates_handle_chunk_types_plans_and_reject_other_sessions() {
     updates::apply(&mut state, &json!({"sessionId":"session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"resource_link","name":"Readme","uri":"file:///README.md"}}})).unwrap();
     assert!(state.messages[0].text.contains("Readme"));
     updates::apply(&mut state, &json!({"sessionId":"session","update":{"sessionUpdate":"plan","entries":[{"status":"pending","content":"Run tests"}]}})).unwrap();
-    assert!(state.messages[1].text.contains("Run tests"));
+    assert_eq!(state.plan[0].content, "Run tests");
+    assert_eq!(state.plan[0].status, "pending");
+    // A later plan replaces the earlier one instead of being appended to the conversation.
+    updates::apply(&mut state, &json!({"sessionId":"session","update":{"sessionUpdate":"plan","entries":[{"status":"completed","content":"Run tests"},{"content":"Ship"}]}})).unwrap();
+    assert_eq!(state.plan.len(), 2);
+    assert_eq!(state.plan[0].status, "completed");
+    assert_eq!(state.plan[1].status, "pending");
+    assert_eq!(state.messages.len(), 1, "plans are not conversation text");
+    let oversized: Vec<_> = (0..=super::model::MAX_PLAN_ENTRIES)
+        .map(|index| json!({"content": index.to_string()}))
+        .collect();
+    assert!(
+        updates::apply(
+            &mut state,
+            &json!({"sessionId":"session","update":{"sessionUpdate":"plan","entries":oversized}})
+        )
+        .is_err()
+    );
+    assert_eq!(
+        state.plan.len(),
+        2,
+        "a refused plan leaves the last one in place"
+    );
     assert!(
         updates::apply(
             &mut state,
@@ -138,6 +160,102 @@ fn unit_updates_handle_chunk_types_plans_and_reject_other_sessions() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn regression_a_malformed_update_is_skipped_and_the_session_goes_on() {
+    // One update Orin couldn't read used to end the whole session and lose the turn.
+    let mut state = working();
+    for malformed in [
+        json!({"sessionId":"session","update":{"sessionUpdate":"tool_call_update","status":"completed"}}),
+        json!({"sessionId":"session","update":{"sessionUpdate":"plan"}}),
+        json!({"sessionId":"session","update":{}}),
+        json!({"sessionId":"someone-else","update":{"sessionUpdate":"agent_message_chunk"}}),
+    ] {
+        assert!(
+            updates::apply(&mut state, &malformed).is_err(),
+            "{malformed}"
+        );
+        updates::apply_or_skip(&mut state, &malformed).unwrap();
+    }
+    assert!(state.messages.is_empty() && state.tool_calls.is_empty() && state.plan.is_empty());
+    // A limit the conversation reached is not malformed input: it still stops the session.
+    let chunk = |text: &str| json!({"sessionId":"session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}});
+    let full = "x".repeat(super::model::MAX_TEXT_BYTES);
+    updates::apply_or_skip(&mut state, &chunk(&full)).unwrap();
+    assert!(updates::apply_or_skip(&mut state, &chunk("one more byte")).is_err());
+}
+
+#[test]
+fn unit_tool_json_is_measured_when_it_changes_and_counted_in_the_conversation_size() {
+    let mut state = working();
+    let before = state.text_bytes();
+    let input = json!({"command":"cargo test","cwd":"/project"});
+    updates::tool_update(&mut state, &json!({"toolCallId":"run","rawInput":input})).unwrap();
+    assert_eq!(state.tool_calls[0].raw_bytes, input.to_string().len());
+    assert_eq!(state.text_bytes(), before + input.to_string().len());
+    let output = json!({"exit":0,"stdout":"ok ñ"});
+    updates::tool_update(&mut state, &json!({"toolCallId":"run","rawOutput":output})).unwrap();
+    assert_eq!(
+        state.tool_calls[0].raw_bytes,
+        input.to_string().len() + output.to_string().len()
+    );
+    // Clearing a value takes its size back out.
+    updates::tool_update(&mut state, &json!({"toolCallId":"run","rawInput":null})).unwrap();
+    assert_eq!(state.tool_calls[0].raw_bytes, output.to_string().len());
+    // The limit still counts tool JSON.
+    let huge = json!({"stdout":"x".repeat(super::model::MAX_TEXT_BYTES)});
+    assert!(
+        updates::tool_update(&mut state, &json!({"toolCallId":"run","rawOutput":huge})).is_err()
+    );
+}
+
+#[test]
+fn regression_one_tool_call_cannot_report_unbounded_paths() {
+    // 50,000 locations in one update used to cost over a billion path comparisons under the
+    // state lock.
+    let mut state = working();
+    let locations: Vec<_> = (0..5_000)
+        .map(|index| json!({"path": format!("/project/file-{index}.rs")}))
+        .collect();
+    let diffs: Vec<_> = (0..5_000)
+        .map(|index| json!({"type":"diff","path":format!("/project/diff-{index}.rs"),"oldText":"","newText":""}))
+        .collect();
+    updates::tool_update(
+        &mut state,
+        &json!({"toolCallId":"edit","kind":"edit","status":"completed","locations":locations,"content":diffs}),
+    )
+    .unwrap();
+    assert_eq!(state.tool_calls[0].locations.len(), updates::MAX_TOOL_PATHS);
+    assert_eq!(
+        state.tool_calls[0].diff_paths.len(),
+        updates::MAX_TOOL_PATHS
+    );
+    assert_eq!(state.changed_files.len(), 2 * updates::MAX_TOOL_PATHS);
+}
+
+#[test]
+fn unit_tool_calls_split_the_reply_where_they_happened() {
+    let mut state = working();
+    let chunk = |text: &str| json!({"sessionId":"session","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":text}}});
+    updates::apply(&mut state, &chunk("Reading ")).unwrap();
+    updates::apply(&mut state, &chunk("the file.")).unwrap();
+    updates::tool_update(&mut state, &json!({"toolCallId":"read","kind":"read"})).unwrap();
+    updates::apply(&mut state, &chunk("Now editing.")).unwrap();
+    // A later update to the same call must not move it or split the reply again.
+    updates::tool_update(
+        &mut state,
+        &json!({"toolCallId":"read","status":"completed"}),
+    )
+    .unwrap();
+    updates::apply(&mut state, &chunk(" Done.")).unwrap();
+    let texts: Vec<_> = state
+        .messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect();
+    assert_eq!(texts, ["Reading the file.", "Now editing. Done."]);
+    assert_eq!(state.tool_calls[0].after_message, 1);
 }
 
 #[test]

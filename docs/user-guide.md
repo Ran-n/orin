@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:34.241299 )
-[//]: # (+ Revised: 	2026/11/13 15:43:58.538934 )
+[//]: # (+ Revised: 	2026/11/14 21:38:31.777250 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -20,8 +20,9 @@ It installs for your user without administrator access. Uninstall removes the pr
 | Agents column with Claude Code, Codex, and Gemini CLI over ACP | Available |
 | Windows | Verified |
 | Linux and macOS | Release downloads built, not yet verified |
-| Release downloads and in-app updates | Available from 0.1.0 |
-| Installers | Not available |
+| Release downloads and in-app updates | Available from 0.1.0; updates are signature-checked from 0.3.0 |
+| Windows installer | Available from 0.2.0 |
+| Linux and macOS installers | Not available |
 
 ## Set Up Agents
 
@@ -41,20 +42,29 @@ Orin has no account of its own and never asks for your credentials. The person b
 **Sign in** runs that agent's own login in the Terminal column. Signing in to Orin itself (for example to sync settings)
 is shown in the menu but isn't available yet.
 
-Without Node.js, and without an adapter of your own on your `PATH`, an agent's start button is greyed out and the Agents
-column says what to install.
+Without Node.js, and without an adapter of your own on your `PATH`, an agent's start button is greyed out. The empty
+Agents column then says what a greyed-out agent needs and offers **Set up agents**, which opens **Settings › Accounts**.
+
+There, an agent whose CLI is missing shows **Install guide** on its card, which opens the vendor's installation page.
+Under **Tool folders**, use **Add tool folder…** if a CLI or Node.js is installed outside the detected locations.
+Choose the folder containing `claude`, `codex`, `gemini`, or `npx`; the folder is listed there, remembered across
+restarts, and removed with its ×.
+VS Code extensions alone are not CLI installations. After changing tool folders, restart an already running
+Terminal before using it to sign in; newly launched agents use the new folders immediately.
 
 ## The Welcome Page
 
 When no project is open, Orin starts on **Welcome**, like VS Code's start page:
 
-- **Start:** **Open Folder…** (Ctrl+Shift+O) picks a project folder with your system's folder browser; **Settings** opens Settings.
+- **Start:** the **Open Folder…** button (Ctrl+Shift+O) picks a project folder with your system's folder browser; **Settings** below it opens Settings.
 - **Recent:** the last ten folders you opened, newest first. Click one to open it; × removes it from the list
   (the folder itself is not touched). Hover a folder to see its full path.
 - **Get started:** shortcuts to the theme and fonts, the agent accounts, and the column layout.
 
-The Orin logo in the title bar, or the box in the middle of the title bar, brings Welcome back at any time;
-**Back to** *project* returns to the columns.
+The Orin logo or the box in the middle of the title bar closes the current folder and returns to Welcome.
+The **Close Folder** (×) button beside Open does the same. Orin stops the folder's terminals and agents,
+clears the active project, and keeps it in Recent. Save or reload unsaved edits before closing or changing folders.
+An automatically started shell does not prevent opening another recent folder.
 
 ## The Workspace
 
@@ -69,7 +79,10 @@ It is laid out like VS Code:
   Files and folders Git ignores, such as build output, are shown in grey.
 - The **status bar** shows the Git branch on the left and the open file's language on the right.
 
-- **Move** a column by dragging its title (the icon and name in its header) left or right; the others make room as you go.
+Files and agent sessions use flat tabs with their file icons or provider logos. The editor's **…** menu contains
+Save, Undo, Redo, and Reload from disk; Ctrl+S, Ctrl+Z, and Ctrl+Y also work while editing.
+
+- **Move** a column by dragging its header or the small grip at the left of its tab strip; the others make room as you go.
 - **Resize** a column by dragging the divider next to it. The Agents column takes whatever width is left.
 - **Hide** a column with the « button in its header; it shrinks to a narrow strip. Click the strip's icon to bring it back.
 - **Reset** the column order, widths, and hidden columns under **Settings › Layout**.
@@ -90,13 +103,15 @@ Every choice applies at once and is remembered.
   or not installed. **Sign in** closes Settings and runs the agent's login in the Terminal column (`claude auth login`,
   `codex login`, or `gemini`), where you answer its prompts. **Check again** asks every agent once more.
   Signing in needs an open project, because the terminal starts in the project folder.
+  An agent that isn't installed shows **Install guide** instead, and **Tool folders** lists the extra folders Orin
+  searches for agent tools (see [Set Up Agents](#set-up-agents)).
 - **Layout:** reset the column order, widths, and hidden columns.
 - **Updates:** the version you run and the result of the last check. Orin checks for a new release a minute after it
   starts and once a day after that; **Check for updates automatically** turns that off, and **Check now** checks at once.
   When a newer version has a build for your system, a banner says so: **Skip this version** stays quiet until a newer one
   appears (**Stop skipping** in Settings › Updates offers it again), and × hides the banner until Orin starts again
-  or a different version is offered. **Update and restart** downloads the new version (**Cancel** stops it), checks it
-  against its published BLAKE3 checksum, and reopens your project in it (unsaved edits are asked about first, as on
+  or a different version is offered. **Update and restart** downloads the new version (**Cancel** stops it), checks that
+  it is signed with Orin's release key and matches its published BLAKE3 checksum, and reopens your project in it (unsaved edits are asked about first, as on
   every quit). While an agent is working, Orin doesn't cut it off: the banner offers **Restart now** instead. If Orin
   can't replace itself (for example in a protected folder), download it from the release page.
   A copy you built from source doesn't check: update it with `git pull` and a new build.
@@ -111,17 +126,26 @@ Every choice applies at once and is remembered.
    are marked as code, script, document, config, data, image or archive. Folders such as src, tests, docs and build
    output have their own icons too; outside Git, build output is dimmed. Only Git's own `.git` folder is hidden.
    The list refreshes when files change on disk; the refresh button (Ctrl+Shift+R) forces it.
-3. **Start an agent** with **+ Claude**, **+ Codex**, or **+ Gemini** in the Agents header.
+3. **Start an agent** with its button in the empty Agents column (**Claude Code**, **Codex**, or **Gemini CLI**), or
+   with its logo in the Agents header once a session is open.
    You can run several sessions at once; each gets a tab showing its status as a coloured dot.
    **Choose the model** (and, where the agent offers them, the reasoning effort and mode) from the buttons under the tabs.
    The list is the agent's own, so it follows what your plan includes. Orin remembers your choice for each agent once the
    agent accepts it, and new sessions of that agent start with it; a choice the agent refuses is reported and not kept.
-4. **Give it an intention** in the message box. Enter sends; Shift+Enter adds a new line. **Cancel** stops the current turn.
+4. **Give it an intention** in the message box, which wraps long lines and grows as you type. Enter sends;
+   Shift+Enter adds a new line. Home and End move within the row the caret is on, and a long draft scrolls to keep
+   the caret in view.
+   While the agent works, the box shows what it is doing and **Stop** takes the place of Send to end the current turn.
+   The conversation reads in the order things happened: your messages, the agent's replies (Markdown is shown formatted,
+   with coloured code blocks; links to web pages open in your browser and links to project files open in **Code**),
+   its reasoning, and each tool call with a mark for pending, running, done, or failed. When the agent shares a plan,
+   it is pinned above the message box as a checklist that follows the agent's progress.
 5. **Answer permission requests.** When an agent asks to change files or run a command, the request is pinned above the
-   message box with the agent's own choices (such as *Allow once* or *Reject*) plus **Decline**. The agent waits for your answer.
+   message box with the command and the files it names, and the agent's own choices (such as *Allow once* or *Reject*)
+   plus **Decline**. The first way to allow it is highlighted. The agent waits for your answer.
    Which actions ask first is set by each agent's own permission settings.
-6. **Review changes.** Files an agent changed appear as **Review** buttons in its conversation and open in **Code**.
-   Switch between **File**, **Unstaged**, and **Staged** to see the file or its Git changes.
+6. **Review changes.** Files an agent changed are listed under its conversation, one button per file; a button opens
+   the file in **Code**. Switch between **File**, **Unstaged**, and **Staged** to see the file or its Git changes.
 7. **Edit by hand** in **Code**. The open file shows as a tab, and its × closes it (save or reload first if you have
    unsaved edits); undo, redo, reload, and save are in the column header.
    Code is coloured by language, as in VS Code, using the same TextMate-style grammars (Rust, Python, JavaScript,
@@ -174,7 +198,7 @@ Every choice applies at once and is remembered.
   data: the update check sends only the request and `User-Agent: Orin/<version>`. What an agent sends to its vendor is
   governed by that agent and its vendor.
 - Update downloads wait in the cache folder (on Windows, `%LOCALAPPDATA%\Breren\Orin\cache\updates`) only until they
-  are installed; a download that fails, doesn't match its checksum, or is interrupted is deleted.
+  are installed; a download that fails, isn't signed with Orin's release key, doesn't match its checksum, or is interrupted is deleted.
 
 ## Help
 

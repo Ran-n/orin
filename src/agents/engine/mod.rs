@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:35:23.247522
-//+ Revised: 	2026/11/12 15:28:14.505038
+//+ Revised: 	2026/11/14 12:09:12.746154
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -161,6 +161,7 @@ impl Engine {
     fn check_child(&mut self) -> Result<()> {
         if let Some(status) = self.child.try_wait()? {
             self.reaped = true;
+            self.tree.leader_reaped();
             bail!(
                 "The ACP adapter exited ({}). Check its CLI installation and sign-in, then start a new session.",
                 status
@@ -196,6 +197,7 @@ impl Engine {
                 tracing::error!(%error, "failed to reap agent process");
             }
             self.reaped = true;
+            self.tree.leader_reaped();
         }
         let mut state = lock(&self.state);
         if state.status != AgentStatus::Failed {

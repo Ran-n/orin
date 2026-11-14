@@ -1,13 +1,14 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:37.940661
-//+ Revised: 	2026/11/13 07:53:51.105333
+//+ Revised: 	2026/11/14 21:46:04.383946
 // -----------------------------------------------------------------------------
 
 //! Downloading a release binary and proving it is the one the release published.
 
 use super::{
     release::{Asset, UpdateError},
+    signature,
     source::Http,
 };
 use std::{
@@ -25,35 +26,42 @@ pub const MAX_DOWNLOAD: u64 = 200 * 1024 * 1024;
 pub const MAX_DOWNLOAD_TIME: Duration = Duration::from_secs(30 * 60);
 /// A `.b3` file is one line: 64 hex digits, two spaces, and the file name.
 const MAX_CHECKSUM: u64 = 1024;
+/// A `.sig` file is one line of 128 hex digits.
+const MAX_SIGNATURE: u64 = 1024;
 /// Every temporary download starts with this, so leftovers can be told from anything else.
 pub const PREFIX: &str = "orin-update-";
 
+/// What proves a download is intact and the maintainer's: the release's `.b3` and `.sig`
+/// files, the version it is offered as, and the public keys (hex) one of which must have
+/// signed it.
+#[derive(Clone, Copy, Debug)]
+pub struct Proof<'a> {
+    pub checksum: &'a Asset,
+    pub signature: &'a Asset,
+    pub version: &'a semver::Version,
+    pub keys: &'a [String],
+}
+
 /// Stream `asset` into a temporary file in `dir` while hashing it, and keep it only when its
-/// BLAKE3 hash matches `checksum`. `progress` gets the bytes read and the declared size.
+/// BLAKE3 hash matches the checksum in `proof`. The checksum itself is only believed when the
+/// release key signed it for this version and asset, which is checked before a byte of the
+/// binary is fetched. `progress` gets the bytes read and the declared size.
 /// Setting `cancel` stops between chunks; the temporary file is deleted whenever this fails.
 pub fn download(
     http: &Http,
     asset: &Asset,
-    checksum: &Asset,
+    proof: Proof,
     dir: &Path,
     cancel: &AtomicBool,
     progress: impl FnMut(u64, Option<u64>),
 ) -> Result<NamedTempFile, UpdateError> {
-    download_within(
-        http,
-        asset,
-        checksum,
-        dir,
-        cancel,
-        progress,
-        MAX_DOWNLOAD_TIME,
-    )
+    download_within(http, asset, proof, dir, cancel, progress, MAX_DOWNLOAD_TIME)
 }
 
 fn download_within(
     http: &Http,
     asset: &Asset,
-    checksum: &Asset,
+    proof: Proof,
     dir: &Path,
     cancel: &AtomicBool,
     mut progress: impl FnMut(u64, Option<u64>),
@@ -61,7 +69,12 @@ fn download_within(
 ) -> Result<NamedTempFile, UpdateError> {
     let started = Instant::now();
     tracing::info!(target: "orin::update", asset = %asset.name, "Update download started");
-    let expected = expected_hash(&http.text(&checksum.url, "text/plain", MAX_CHECKSUM)?)?;
+    let expected = expected_hash(&http.text(&proof.checksum.url, "text/plain", MAX_CHECKSUM)?)?;
+    let signature = http.text(&proof.signature.url, "text/plain", MAX_SIGNATURE)?;
+    let statement = signature::statement(proof.version, &asset.name, &expected);
+    signature::verify_any(proof.keys, &statement, &signature).inspect_err(|error| {
+        tracing::error!(target: "orin::update", asset = %asset.name, %error, "Update signature refused");
+    })?;
     let (length, mut body) = http.stream(&asset.url)?;
     if length.is_some_and(|length| length > MAX_DOWNLOAD) {
         return Err(UpdateError::TooLarge(MAX_DOWNLOAD >> 20));
@@ -162,8 +175,56 @@ mod tests {
         )
     }
 
+    fn version() -> semver::Version {
+        semver::Version::new(0, 3, 0)
+    }
+
     fn b3(bytes: &[u8]) -> String {
         format!("{}  orin\n", blake3::hash(bytes).to_hex())
+    }
+
+    /// The `.sig` the test key makes for `bytes` published as `orin`, version 0.3.0.
+    fn sig(bytes: &[u8]) -> String {
+        let (secret, _) = signature::test_keys();
+        let hash = blake3::hash(bytes).to_hex();
+        signature::sign(
+            &secret,
+            &signature::statement(&version(), "orin", hash.as_str()),
+        )
+        .unwrap()
+    }
+
+    /// Fetch the fixture's `orin` as version 0.3.0, signed by the test key at `/orin.sig`.
+    fn fetch(
+        server: &FixtureServer,
+        dir: &Path,
+        cancel: &AtomicBool,
+        progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<NamedTempFile, UpdateError> {
+        fetch_within(server, dir, cancel, progress, MAX_DOWNLOAD_TIME)
+    }
+
+    fn fetch_within(
+        server: &FixtureServer,
+        dir: &Path,
+        cancel: &AtomicBool,
+        progress: impl FnMut(u64, Option<u64>),
+        limit: Duration,
+    ) -> Result<NamedTempFile, UpdateError> {
+        let (asset, checksum) = assets(server);
+        let signature = Asset {
+            name: "orin.sig".into(),
+            url: server.url("/orin.sig"),
+        };
+        let keys = [signature::test_keys().1];
+        let version = version();
+        let proof = Proof {
+            checksum: &checksum,
+            signature: &signature,
+            version: &version,
+            keys: &keys,
+        };
+        download_within(&http(), &asset, proof, dir, cancel, progress, limit)
     }
 
     fn files_in(dir: &Path) -> usize {
@@ -175,19 +236,11 @@ mod tests {
         let binary = vec![7_u8; 300_000];
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(sig(&binary))),
             ("/orin", Reply::ok(binary.clone())),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        let file = download(
-            &http(),
-            &asset,
-            &checksum,
-            dir.path(),
-            &AtomicBool::new(false),
-            |_, _| {},
-        )
-        .unwrap();
+        let file = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {}).unwrap();
         assert_eq!(std::fs::read(file.path()).unwrap(), binary);
         assert!(
             file.path()
@@ -202,18 +255,11 @@ mod tests {
     fn unit_checksum_mismatch_deletes_file() {
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(b"something else"))),
+            ("/orin.sig", Reply::ok(sig(b"something else"))),
             ("/orin", Reply::ok(vec![1_u8; 1000])),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        let result = download(
-            &http(),
-            &asset,
-            &checksum,
-            dir.path(),
-            &AtomicBool::new(false),
-            |_, _| {},
-        );
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
         assert_eq!(result.unwrap_err(), UpdateError::Checksum);
         assert_eq!(files_in(dir.path()), 0, "the rejected download is deleted");
     }
@@ -222,21 +268,14 @@ mod tests {
     fn unit_oversize_is_refused() {
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(b"x"))),
+            ("/orin.sig", Reply::ok(sig(b"x"))),
             (
                 "/orin",
                 Reply::ok(b"x".to_vec()).declaring_length(MAX_DOWNLOAD + 1),
             ),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        let result = download(
-            &http(),
-            &asset,
-            &checksum,
-            dir.path(),
-            &AtomicBool::new(false),
-            |_, _| {},
-        );
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
         assert_eq!(result.unwrap_err(), UpdateError::TooLarge(200));
         assert_eq!(files_in(dir.path()), 0);
     }
@@ -246,23 +285,16 @@ mod tests {
         let binary = vec![3_u8; 1_000_000];
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(sig(&binary))),
             ("/orin", Reply::ok(binary)),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
         let cancel = AtomicBool::new(false);
-        let result = download(
-            &http(),
-            &asset,
-            &checksum,
-            dir.path(),
-            &cancel,
-            |read, _| {
-                if read > 100_000 {
-                    cancel.store(true, Ordering::Release);
-                }
-            },
-        );
+        let result = fetch(&server, dir.path(), &cancel, |read, _| {
+            if read > 100_000 {
+                cancel.store(true, Ordering::Release);
+            }
+        });
         assert_eq!(result.unwrap_err(), UpdateError::Cancelled);
         assert_eq!(files_in(dir.path()), 0);
     }
@@ -272,14 +304,12 @@ mod tests {
         let binary = vec![5_u8; 64 * 1024 * 4];
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(sig(&binary))),
             ("/orin", Reply::ok(binary).paced(Duration::from_millis(30))),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        let result = download_within(
-            &http(),
-            &asset,
-            &checksum,
+        let result = fetch_within(
+            &server,
             dir.path(),
             &AtomicBool::new(false),
             |_, _| {},
@@ -298,18 +328,11 @@ mod tests {
         let length = binary.len() as u64 + 1_000;
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(sig(&binary))),
             ("/orin", Reply::ok(binary).declaring_length(length)),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        let result = download(
-            &http(),
-            &asset,
-            &checksum,
-            dir.path(),
-            &AtomicBool::new(false),
-            |_, _| {},
-        );
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
         assert!(result.is_err(), "a short body is refused");
         assert_eq!(files_in(dir.path()), 0);
     }
@@ -319,15 +342,13 @@ mod tests {
         let binary = vec![9_u8; 250_000];
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(sig(&binary))),
             ("/orin", Reply::ok(binary.clone())),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
         let mut last = (0, None);
-        download(
-            &http(),
-            &asset,
-            &checksum,
+        fetch(
+            &server,
             dir.path(),
             &AtomicBool::new(false),
             |read, total| {
@@ -344,37 +365,85 @@ mod tests {
         let binary = b"orin binary".to_vec();
         let server = FixtureServer::start(vec![
             ("/orin.b3", Reply::ok(b3(&binary).to_uppercase())),
+            ("/orin.sig", Reply::ok(sig(&binary))),
             ("/orin", Reply::ok(binary)),
         ]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        assert!(
-            download(
-                &http(),
-                &asset,
-                &checksum,
-                dir.path(),
-                &AtomicBool::new(false),
-                |_, _| {}
-            )
-            .is_ok()
-        );
+        assert!(fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {}).is_ok());
     }
 
     #[test]
     fn unit_malformed_checksum_file_is_refused_before_downloading() {
         let server = FixtureServer::start(vec![("/orin.b3", Reply::ok("not a hash\n"))]);
         let dir = tempfile::tempdir().unwrap();
-        let (asset, checksum) = assets(&server);
-        let result = download(
-            &http(),
-            &asset,
-            &checksum,
-            dir.path(),
-            &AtomicBool::new(false),
-            |_, _| {},
-        );
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
         assert_eq!(result.unwrap_err(), UpdateError::Parse("the checksum"));
         assert_eq!(server.requests("/orin"), 0);
+    }
+
+    #[test]
+    fn unit_a_release_signed_by_someone_else_is_refused_before_downloading() {
+        let binary = b"a build from whoever controls the server".to_vec();
+        let stranger = signature::sign(
+            &"09".repeat(32),
+            &signature::statement(&version(), "orin", blake3::hash(&binary).to_hex().as_str()),
+        )
+        .unwrap();
+        let server = FixtureServer::start(vec![
+            ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(stranger)),
+            ("/orin", Reply::ok(binary)),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
+        assert_eq!(result.unwrap_err(), UpdateError::Signature);
+        assert_eq!(server.requests("/orin"), 0, "nothing unsigned is fetched");
+        assert_eq!(files_in(dir.path()), 0);
+    }
+
+    #[test]
+    fn unit_a_genuine_signature_for_other_bytes_or_another_version_is_refused() {
+        let binary = b"the binary the server sends".to_vec();
+        // Signed by the release key, but for an older build's bytes.
+        let server = FixtureServer::start(vec![
+            ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin.sig", Reply::ok(sig(b"an older, genuine build"))),
+            ("/orin", Reply::ok(binary.clone())),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
+        assert_eq!(result.unwrap_err(), UpdateError::Signature);
+        // The right bytes, signed as version 0.2.0 and offered as 0.3.0.
+        let (secret, _) = signature::test_keys();
+        let older = signature::sign(
+            &secret,
+            &signature::statement(
+                &semver::Version::new(0, 2, 0),
+                "orin",
+                blake3::hash(&binary).to_hex().as_str(),
+            ),
+        )
+        .unwrap();
+        server.route("/orin.sig", Reply::ok(older));
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
+        assert_eq!(result.unwrap_err(), UpdateError::Signature);
+        assert_eq!(server.requests("/orin"), 0);
+    }
+
+    #[test]
+    fn unit_a_missing_or_unreadable_signature_is_refused() {
+        let binary = b"orin binary".to_vec();
+        let server = FixtureServer::start(vec![
+            ("/orin.b3", Reply::ok(b3(&binary))),
+            ("/orin", Reply::ok(binary.clone())),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
+        assert!(result.is_err(), "no signature, no install");
+        server.route("/orin.sig", Reply::ok("not a signature\n"));
+        let result = fetch(&server, dir.path(), &AtomicBool::new(false), |_, _| {});
+        assert_eq!(result.unwrap_err(), UpdateError::Parse("the signature"));
+        assert_eq!(server.requests("/orin"), 0);
+        assert_eq!(files_in(dir.path()), 0);
     }
 }

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:35:21.271627
-//+ Revised: 	2026/11/12 10:31:34.637419
+//+ Revised: 	2026/11/14 01:02:24.899082
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -49,6 +49,29 @@ pub struct ToolCall {
     pub diff_paths: Vec<PathBuf>,
     pub raw_input: Option<serde_json::Value>,
     pub raw_output: Option<serde_json::Value>,
+    /// How many messages the conversation held when this call first appeared: the call is
+    /// shown after that many messages, where it happened, rather than below the whole reply.
+    pub after_message: usize,
+    /// The size of `raw_input` and `raw_output` as JSON, measured when they are set so the
+    /// conversation's size can be checked on every streamed chunk without serialising them again.
+    #[serde(skip)]
+    pub raw_bytes: usize,
+}
+
+impl ToolCall {
+    /// Measure `raw_input` and `raw_output` again after either changed.
+    pub(super) fn measure_raw(&mut self) {
+        self.raw_bytes = self.raw_input.as_ref().map_or(0, json_len)
+            + self.raw_output.as_ref().map_or(0, json_len);
+    }
+}
+
+/// One step of the plan an agent reports, with the agent's own status for it
+/// (`pending`, `in_progress`, or `completed`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanEntry {
+    pub content: String,
+    pub status: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +103,8 @@ pub struct AgentSnapshot {
     pub session_id: Option<String>,
     pub messages: Vec<AgentMessage>,
     pub tool_calls: Vec<ToolCall>,
+    /// The agent's current plan; each plan update replaces the whole list.
+    pub plan: Vec<PlanEntry>,
     pub pending_permissions: Vec<PendingPermission>,
     pub changed_files: Vec<PathBuf>,
     pub error: Option<String>,
@@ -93,6 +118,7 @@ pub(super) type SharedState = Arc<Mutex<AgentSnapshot>>;
 pub(super) const MAX_MESSAGES: usize = 1_000;
 pub(super) const MAX_TEXT_BYTES: usize = 2 * 1_024 * 1_024;
 pub(super) const MAX_TOOLS: usize = 1_000;
+pub(super) const MAX_PLAN_ENTRIES: usize = 200;
 
 impl AgentSnapshot {
     pub fn new(provider: Provider) -> Self {
@@ -102,6 +128,7 @@ impl AgentSnapshot {
             session_id: None,
             messages: Vec::new(),
             tool_calls: Vec::new(),
+            plan: Vec::new(),
             pending_permissions: Vec::new(),
             changed_files: Vec::new(),
             error: None,
@@ -131,10 +158,16 @@ impl AgentSnapshot {
             "Conversation reached its {} MiB text limit; start a new session.",
             MAX_TEXT_BYTES >> 20
         );
+        // A tool call made after the last message ends that message: text that follows the
+        // call is a new message, so the conversation reads in the order things happened.
+        let interrupted = self
+            .tool_calls
+            .last()
+            .is_some_and(|tool| tool.after_message == self.messages.len());
         if let Some(message) = self
             .messages
             .last_mut()
-            .filter(|message| message.role == role && role != MessageRole::User)
+            .filter(|message| message.role == role && role != MessageRole::User && !interrupted)
         {
             message.text.push_str(text);
         } else {
@@ -158,17 +191,17 @@ impl AgentSnapshot {
             + self
                 .tool_calls
                 .iter()
-                .map(|tool| {
-                    tool.content.iter().map(String::len).sum::<usize>()
-                        + tool.raw_input.as_ref().map_or(0, json_len)
-                        + tool.raw_output.as_ref().map_or(0, json_len)
-                })
+                .map(|tool| tool.content.iter().map(String::len).sum::<usize>() + tool.raw_bytes)
+                .sum::<usize>()
+            + self
+                .plan
+                .iter()
+                .map(|entry| entry.content.len())
                 .sum::<usize>()
     }
 }
 
-/// The length of `value` as compact JSON, measured without building the string: this runs for
-/// every streamed chunk, over every tool call in the conversation.
+/// The length of `value` as compact JSON, measured without building the string.
 fn json_len(value: &serde_json::Value) -> usize {
     struct Counter(usize);
     impl std::io::Write for Counter {

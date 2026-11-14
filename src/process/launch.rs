@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:37:14.156451
-//+ Revised: 	2026/11/12 15:10:20.551862
+//+ Revised: 	2026/11/13 17:39:06.560175
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -47,6 +47,150 @@ pub(crate) fn resolve(program: &Path, path: Option<&OsStr>) -> Option<PathBuf> {
         })
 }
 
+/// Search configured tool folders first, then PATH and standard user installations.
+pub(crate) fn tool_path(extra: &[PathBuf], discover: bool) -> Option<OsString> {
+    let mut directories = extra.to_vec();
+    directories.extend(
+        env::var_os("PATH")
+            .iter()
+            .flat_map(|path| env::split_paths(path)),
+    );
+    if discover {
+        #[cfg(windows)]
+        directories.extend(windows_tool_directories());
+        if let Some(base) = directories::BaseDirs::new() {
+            directories.push(base.home_dir().join(".local/bin"));
+            directories.push(base.home_dir().join(".npm-global/bin"));
+            #[cfg(windows)]
+            {
+                directories.push(base.home_dir().join("AppData/Roaming/npm"));
+                directories.push(base.home_dir().join("scoop/shims"));
+            }
+        }
+        #[cfg(windows)]
+        for (variable, suffix) in [
+            ("NVM_SYMLINK", ""),
+            ("NVM_HOME", ""),
+            ("ProgramFiles", "nodejs"),
+            ("LOCALAPPDATA", "Programs/nodejs"),
+            ("APPDATA", "npm"),
+        ] {
+            if let Some(root) = env::var_os(variable) {
+                directories.push(PathBuf::from(root).join(suffix));
+            }
+        }
+        #[cfg(unix)]
+        directories.extend([
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/opt/homebrew/bin"),
+        ]);
+    }
+    let mut unique = Vec::new();
+    for directory in directories {
+        if directory.is_absolute() && !unique.contains(&directory) {
+            unique.push(directory);
+        }
+    }
+    match env::join_paths(unique) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            tracing::error!(%error, "Tool search path could not be constructed");
+            None
+        }
+    }
+}
+
+#[cfg(windows)]
+fn windows_tool_directories() -> Vec<PathBuf> {
+    use windows_sys::Win32::System::Registry::*;
+    fn value(root: HKEY, key: &str, name: &str) -> Option<String> {
+        let key: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+        let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let mut buffer = vec![0u16; 32_768];
+        let mut bytes = (buffer.len() * 2) as u32;
+        // The key/value strings are terminated and the output length describes this buffer.
+        let result = unsafe {
+            RegGetValueW(
+                root,
+                key.as_ptr(),
+                name.as_ptr(),
+                RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND,
+                std::ptr::null_mut(),
+                buffer.as_mut_ptr().cast(),
+                &mut bytes,
+            )
+        };
+        if result != 0 {
+            if ![2, 3].contains(&result) {
+                tracing::warn!(result, "Windows tool environment could not be read");
+            }
+            return None;
+        }
+        let units = (bytes as usize / 2).min(buffer.len());
+        Some(
+            String::from_utf16_lossy(&buffer[..units])
+                .trim_end_matches('\0')
+                .to_owned(),
+        )
+    }
+    let keys = [
+        (HKEY_CURRENT_USER, "Environment"),
+        (
+            HKEY_LOCAL_MACHINE,
+            "SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+        ),
+    ];
+    let lookup = |name: &str| {
+        keys.iter()
+            .find_map(|(root, key)| value(*root, key, name))
+            .or_else(|| env::var(name).ok())
+    };
+    let expand = |text: &str| expand_environment(text, lookup);
+    let mut directories = Vec::new();
+    for (root, key) in keys {
+        if let Some(path) = value(root, key, "Path") {
+            directories.extend(env::split_paths(&expand(&path)));
+        }
+        for name in ["NVM_SYMLINK", "NVM_HOME"] {
+            if let Some(path) = value(root, key, name) {
+                directories.push(PathBuf::from(expand(&path)));
+            }
+        }
+    }
+    directories
+}
+
+#[cfg(any(windows, test))]
+fn expand_environment(text: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
+    let mut expanded = text.to_owned();
+    for _ in 0..4 {
+        let previous = expanded.clone();
+        let mut remaining = previous.as_str();
+        expanded.clear();
+        while let Some(start) = remaining.find('%') {
+            expanded.push_str(&remaining[..start]);
+            remaining = &remaining[start + 1..];
+            let Some(end) = remaining.find('%') else {
+                expanded.push('%');
+                break;
+            };
+            match lookup(&remaining[..end]) {
+                Some(value) => expanded.push_str(&value),
+                None => {
+                    expanded.push('%');
+                    expanded.push_str(&remaining[..=end]);
+                }
+            }
+            remaining = &remaining[end + 1..];
+        }
+        expanded.push_str(remaining);
+        if expanded == previous {
+            break;
+        }
+    }
+    expanded
+}
+
 pub(crate) fn candidates(program: &Path) -> Vec<PathBuf> {
     #[cfg(windows)]
     {
@@ -88,6 +232,72 @@ pub(crate) fn shell_program() -> PathBuf {
             .map(PathBuf::from)
             .filter(|path| executable(path))
             .unwrap_or_else(|| "/bin/sh".into())
+    }
+}
+
+#[cfg(test)]
+mod tool_path_tests {
+    use super::*;
+
+    #[test]
+    fn platform_tool_discovery_retains_only_absolute_folders() {
+        let path = tool_path(&[], true).unwrap();
+        assert!(env::split_paths(&path).all(|folder| folder.is_absolute()));
+        #[cfg(windows)]
+        assert!(
+            !windows_tool_directories().is_empty(),
+            "Windows' registered tool paths must be discoverable without Explorer's PATH"
+        );
+    }
+
+    #[test]
+    fn nested_environment_paths_expand_and_unknown_variables_remain_literal() {
+        let lookup = |name: &str| match name {
+            "NODE" => Some("%ROOT%/node".into()),
+            "ROOT" => Some("C:/Tools Ω".into()),
+            "LOOP" => Some("%LOOP%/again".into()),
+            _ => None,
+        };
+        assert_eq!(
+            expand_environment("%NODE%/bin", lookup),
+            "C:/Tools Ω/node/bin"
+        );
+        assert_eq!(expand_environment("%MISSING%/bin", lookup), "%MISSING%/bin");
+        assert_eq!(expand_environment("folder%tail", lookup), "folder%tail");
+        assert_eq!(
+            expand_environment("%LOOP%", lookup),
+            "%LOOP%/again/again/again/again"
+        );
+    }
+
+    #[test]
+    fn configured_tool_folders_take_priority_and_survive_spaces_and_unicode() {
+        let folder = tempfile::Builder::new()
+            .prefix("orin tools Ω ")
+            .tempdir()
+            .unwrap();
+        let executable = folder.path().join(if cfg!(windows) {
+            "orin-tool-probe.exe"
+        } else {
+            "orin-tool-probe"
+        });
+        std::fs::write(&executable, "fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = tool_path(&[folder.path().to_owned(), folder.path().to_owned()], false).unwrap();
+        assert_eq!(
+            resolve(Path::new("orin-tool-probe"), Some(&path)),
+            Some(executable)
+        );
+        assert_eq!(
+            env::split_paths(&path)
+                .filter(|entry| entry == folder.path())
+                .count(),
+            1
+        );
     }
 }
 

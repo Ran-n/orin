@@ -53,6 +53,11 @@ jobs:
         shell: bash
     env:
       ORIN_RELEASE_TARGET: ${{ matrix.target }}
+    # The attestation is signed with this job's identity and stored with the repository.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -92,6 +97,13 @@ jobs:
             b3sum --check "$($installer.Name).b3"
             if ($LASTEXITCODE -ne 0) { throw 'Installer checksum verification failed.' }
           } finally { Pop-Location }
+      # Records which workflow run, at which commit, produced each file. The maintainer checks
+      # it with `gh attestation verify` before signing, so a file swapped into the draft
+      # afterwards is never signed.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
       - uses: actions/upload-artifact@v4
         with:
           name: orin-${{ matrix.target }}

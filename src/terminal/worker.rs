@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:13:52.229635
-//+ Revised: 	2026/11/12 09:16:42.329466
+//+ Revised: 	2026/11/14 12:09:13.053354
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -9,7 +9,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError, Sender},
+        mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError},
     },
     time::Duration,
 };
@@ -55,6 +55,7 @@ impl Worker {
         while !self.shutdown.load(Ordering::Acquire) {
             if let Some(status) = self.child.try_wait()? {
                 self.reaped = true;
+                self.tree.leader_reaped();
                 lock(&self.screen).mark_exited(status.exit_code());
                 tracing::info!(exit_code = status.exit_code(), "terminal process exited");
                 break;
@@ -107,6 +108,7 @@ impl Worker {
                 Ok(status) => {
                     lock(&self.screen).mark_exited(status.exit_code());
                     self.reaped = true;
+                    self.tree.leader_reaped();
                 }
                 Err(error) => {
                     lock(&self.screen)
@@ -126,11 +128,16 @@ impl Drop for Worker {
     }
 }
 
+/// How many answers to the shell's terminal queries may wait for the input writer. A program
+/// that keeps asking without reading (a file full of cursor-position queries sent to the
+/// screen) would otherwise queue answers without limit.
+pub(super) const REPLY_CAPACITY: usize = 64;
+
 pub(super) fn read_output(
     mut reader: Box<dyn Read + Send>,
     screen: SharedScreen,
     shutdown: Arc<AtomicBool>,
-    replies: Sender<Vec<u8>>,
+    replies: SyncSender<Vec<u8>>,
 ) {
     let mut buffer = [0; 8_192];
     let mut queries = super::queries::QueryResponder::default();
@@ -139,11 +146,22 @@ pub(super) fn read_output(
             Ok(0) => break,
             Ok(length) => {
                 let reply = process_chunk(&screen, &mut queries, &buffer[..length]);
-                if !reply.is_empty()
-                    && replies.send(reply).is_err()
-                    && !shutdown.load(Ordering::Acquire)
-                {
-                    lock(&screen).set_error("Cannot answer the shell's terminal query.".into());
+                if reply.is_empty() {
+                    continue;
+                }
+                match replies.try_send(reply) {
+                    Ok(()) => {}
+                    // The program asks faster than it reads the answers; the newest answers
+                    // are dropped rather than held in memory without limit.
+                    Err(TrySendError::Full(_)) => {
+                        tracing::debug!(target: "orin::terminal", "terminal query reply dropped: the shell isn't reading input");
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        if !shutdown.load(Ordering::Acquire) {
+                            lock(&screen)
+                                .set_error("Cannot answer the shell's terminal query.".into());
+                        }
+                    }
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -216,5 +234,27 @@ mod tests {
         let reply = process_chunk(&screen, &mut queries, b"abc\x1b[6nlonger tail\x1b[6n");
         assert_eq!(reply, b"\x1b[1;4R\x1b[1;15R");
         assert!(lock(&screen).snapshot().text.contains("abclonger tail"));
+    }
+
+    #[test]
+    fn regression_unread_query_replies_are_dropped_not_queued_without_limit() {
+        // A program that prints cursor queries without reading the answers (a file full of
+        // them sent to the screen) used to queue one answer per read, without limit.
+        let screen: SharedScreen = Arc::new(Mutex::new(TerminalScreen::new(24, 80).unwrap()));
+        let output = b"\x1b[6n".repeat(40_000);
+        let (replies, unread) = std::sync::mpsc::sync_channel(REPLY_CAPACITY);
+        read_output(
+            Box::new(std::io::Cursor::new(output)),
+            screen.clone(),
+            Arc::new(AtomicBool::new(false)),
+            replies,
+        );
+        let queued = unread.try_iter().count();
+        assert!(queued > 0, "answers are still sent while there is room");
+        assert!(queued <= REPLY_CAPACITY, "{queued} answers were queued");
+        assert!(
+            lock(&screen).snapshot().error.is_none(),
+            "a full queue is not an error the user can act on"
+        );
     }
 }

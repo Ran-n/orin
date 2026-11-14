@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:27:01.491840
-//+ Revised: 	2026/11/13 07:53:51.647504
+//+ Revised: 	2026/11/13 17:30:07.922798
 // -----------------------------------------------------------------------------
 
 //! Project selection and lazy directory expansion run away from the UI thread.
@@ -45,14 +45,8 @@ impl Workspace {
             Some("Orin is closing.")
         } else if self.editor_busy(cx) {
             Some("Save or reload the edited file before changing projects.")
-        } else if self.launching
-            || self.agents.iter().any(|tab| tab.view.read(cx).running())
-            || self
-                .shell
-                .as_ref()
-                .is_some_and(|tab| tab.view.read(cx).running())
-        {
-            Some("Stop the running sessions before changing project folders.")
+        } else if self.loading || self.launching {
+            Some("Wait for the current folder or session to finish opening.")
         } else {
             None
         }
@@ -70,24 +64,119 @@ impl Workspace {
             cx.notify();
             return;
         }
-        let generation = self.project_generation + 1;
+        let cleanup: Box<dyn FnOnce() -> std::io::Result<()> + Send> = if self.project.is_some() {
+            self.detach_project(cx)
+        } else {
+            self.project_generation += 1;
+            Box::new(|| Ok(()))
+        };
+        let generation = self.project_generation;
         let sender = self.sender.clone();
-        if self.submit(move || {
-            let result = Project::open(&path).and_then(|project| {
-                project.list_dir(Path::new("")).map(|entries| {
-                    let watch = crate::project::ProjectWatch::new(project.root());
-                    (project, entries, watch)
+        self.loading = true;
+        self.error = None;
+        if !self.submit(move || {
+            let result = cleanup()
+                .map_err(|source| crate::project::ProjectError::Io {
+                    path: path.clone(),
+                    source,
                 })
-            });
+                .and_then(|_| Project::open(&path))
+                .and_then(|project| {
+                    project.list_dir(Path::new("")).map(|entries| {
+                        let watch = crate::project::ProjectWatch::new(project.root());
+                        (project, entries, watch)
+                    })
+                });
             if sender.send(Event::Project { generation, result }).is_err() {
                 tracing::debug!("Workspace closed during project open");
             }
         }) {
-            self.project_generation = generation;
-            self.loading = true;
-            self.error = None;
-            cx.notify();
+            self.loading = false;
         }
+        cx.notify();
+    }
+
+    pub fn close_project(&mut self, cx: &mut Context<Self>) {
+        if let Some(reason) = self.project_switch_blocked(cx) {
+            self.error = Some(reason.into());
+            cx.notify();
+            return;
+        }
+        let cleanup = self.detach_project(cx);
+        let sender = self.sender.clone();
+        let generation = self.project_generation;
+        self.loading = true;
+        if !self.submit(move || {
+            if sender
+                .send(Event::ProjectClosed {
+                    generation,
+                    result: cleanup(),
+                })
+                .is_err()
+            {
+                tracing::debug!(target: "orin::project", "Workspace closed during project cleanup");
+            }
+        }) {
+            self.loading = false;
+        }
+    }
+
+    fn detach_project(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Box<dyn FnOnce() -> std::io::Result<()> + Send> {
+        let agents = std::mem::take(&mut self.agents)
+            .into_iter()
+            .map(|tab| tab.session)
+            .collect::<Vec<_>>();
+        let shell = self.shell.take().map(|tab| tab.session);
+        let watch = self.watch.take();
+        self.project_generation += 1;
+        self.file_generation += 1;
+        self.document_generation += 1;
+        self.project = None;
+        self.editor = None;
+        self.entries.clear();
+        self.content.clear();
+        self.git = None;
+        self.git_failed = false;
+        self.watch_pending = None;
+        self.shell_input = None;
+        self.settings.project = None;
+        self.settings.selected_file = None;
+        self.settings.expanded_folders.clear();
+        self.settings.editor_cursor = 0;
+        self.settings.active_session = 0;
+        self.settings.page = Some(crate::settings::Page::Welcome);
+        self.changed(cx);
+        Box::new(move || {
+            drop(watch);
+            let mut errors = Vec::new();
+            for session in agents {
+                if let Err(error) = session
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .stop()
+                {
+                    tracing::error!(%error, "Agent could not stop while closing its project");
+                    errors.push("An agent could not stop cleanly.");
+                }
+            }
+            if let Some(session) = shell
+                && let Err(error) = session
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .stop()
+            {
+                tracing::error!(%error, "Shell could not stop while closing its project");
+                errors.push("The terminal could not stop cleanly.");
+            }
+            if errors.is_empty() {
+                Ok(())
+            } else {
+                Err(std::io::Error::other(errors.join(" ")))
+            }
+        })
     }
 
     pub fn refresh_project(&mut self, cx: &mut Context<Self>) {
@@ -96,9 +185,16 @@ impl Workspace {
             self.load_git_status(project);
         }
         let sender = self.sender.clone();
+        let tool_path = self.account_environment.path.clone();
         self.submit(move || {
-            let providers = super::providers::probe_all();
-            if sender.send(Event::Providers(providers)).is_err() {
+            let providers = super::providers::probe_all_in(tool_path.as_deref());
+            if sender
+                .send(Event::Providers {
+                    path: tool_path,
+                    providers,
+                })
+                .is_err()
+            {
                 tracing::debug!("Workspace closed during provider refresh");
             }
         });

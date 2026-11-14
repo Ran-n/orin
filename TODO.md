@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/12 13:19:21.692778 )
-[//]: # (+ Revised: 	2026/11/13 14:36:32.437273 )
+[//]: # (+ Revised: 	2026/11/14 01:02:22.596195 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 # TODO
@@ -14,8 +14,8 @@ Next item number: 10
 
 ## Index
 
-8. [Prove a mismatched release tag stops at verify](#8-prove-a-mismatched-release-tag-stops-at-verify)
-9. [Draw only the visible rows of the diff view](#9-draw-only-the-visible-rows-of-the-diff-view)
+- [8. Prove a mismatched release tag stops at verify](#8-prove-a-mismatched-release-tag-stops-at-verify)
+- [9. Draw only the visible rows of the diff view](#9-draw-only-the-visible-rows-of-the-diff-view)
 
 ## Adding an item
 
@@ -30,7 +30,7 @@ Next item number: 10
 - Numbers ascend in file order. Deleting leaves a gap; when adding at the top
   or moving an item breaks the order, renumber every item in file order (from
   the lowest number in use) and update every reference to them.
-- Keep the Index in file order: one `<n>. [title](#anchor)` line per item;
+- Keep the Index in file order: one `- [<n>. title](#anchor)` line per item;
   update it whenever an item is added, retitled, moved or deleted.
 - Screenshots go in `docs/todo/<n>-<slug>.png`, linked from the item.
 - Split anything bigger than one sitting into items that ship alone.
@@ -134,7 +134,8 @@ while such a diff is open. The editor already shapes only the rows on screen (`E
   `removed_surface`, `@@` walnut, others `soft_text`; each row is `DIFF_LINE_HEIGHT` tall.
 - Horizontal scrolling still reaches the end of the longest line.
 - The scroll position is kept when the diff refreshes with the same file selected (the project watcher refreshes it).
-- An empty diff still shows "No changes in this view."
+- An empty diff still shows its centred state ("This file has no unstaged changes." or "…no staged changes."),
+  and "Loading…" until Git answers (`NO_CHANGES` in `src/desktop/code_layout.rs` marks the empty answer).
 
 ### Out of scope
 - The agent transcript (see Why). Syntax colours inside diffs.

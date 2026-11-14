@@ -1,7 +1,7 @@
 [//]: # ( ---------------------------------------------------------------------- )
 [//]: # (+ Authors: 	Ran# <ran.hash@proton.me> )
 [//]: # (+ Created: 	2026/11/11 12:19:33.694237 )
-[//]: # (+ Revised: 	2026/11/13 16:12:40.730316 )
+[//]: # (+ Revised: 	2026/11/14 21:46:05.009376 )
 [//]: # ( ---------------------------------------------------------------------- )
 
 
@@ -70,7 +70,7 @@ Everything is on screen at once, in four resizable columns:
 <table>
   <tr>
     <td width="50%"><img src="tests/rendered/baselines/windows/agent-permission-1280.png" alt="An agent waiting for permission to change a file" /><br /><b>Answer permission requests</b><br />The agent waits until you allow or reject each change.</td>
-    <td width="50%"><img src="tests/rendered/baselines/windows/agent-complete-1280.png" alt="A finished agent turn with a Review button" /><br /><b>Review what changed</b><br />Each changed file gets a Review button that opens it in Code.</td>
+    <td width="50%"><img src="tests/rendered/baselines/windows/agent-complete-1280.png" alt="A finished agent turn listing the file it changed" /><br /><b>Review what changed</b><br />Each changed file gets a button that opens it in Code.</td>
   </tr>
   <tr>
     <td width="50%"><img src="tests/rendered/baselines/windows/agent-model-menu-1280.png" alt="The model picker of an agent session" /><br /><b>Pick the model</b><br />The agent's own model, effort, and mode lists, remembered per agent.</td>
@@ -105,7 +105,9 @@ An optional desktop shortcut is available during setup. Portable downloads are a
 | Linux (64-bit) | `orin-<version>-linux-x86_64` |
 | macOS (Apple silicon) | `orin-<version>-macos-aarch64` |
 
-Each file has a `.b3` checksum next to it. Orin checks for a new version once a day and updates itself from
+Each file has a `.b3` checksum and a `.sig` signature next to it; Orin only installs an update signed with one of its release keys.
+To check a download yourself, run `b3sum --check <file>.b3`, or from a checkout of the same version
+`cargo run --no-default-features --bin orin-sign -- verify <file>`. Orin checks for a new version once a day and updates itself from
 **Settings › Updates**; you can turn that off there. The Windows installer preserves your settings on upgrades and uninstall.
 
 > [!NOTE]
@@ -213,7 +215,7 @@ Run `cargo test --all-features` for the test suite and `cargo coverage` for the 
 | [Changelog](CHANGELOG.md) | Change history |
 | [Contributors](CONTRIBUTORS) | Authoritative ownership and revenue-share record |
 
-**Built with:** Rust and [GPUI](https://gpui.rs/). Icons from [Lucide](https://lucide.dev/) (ISC license, see [assets/icons/LICENSE](assets/icons/LICENSE)).
+**Built with:** Rust and [GPUI](https://gpui.rs/). Icons from [Lucide](https://lucide.dev/) (ISC license) and agent logos from [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT license); see [assets/icons/LICENSE](assets/icons/LICENSE).
 The default colours are the [Gruvbox](https://github.com/morhetz/gruvbox) palette by Pavel Pertsev (MIT license).
 
 ## License

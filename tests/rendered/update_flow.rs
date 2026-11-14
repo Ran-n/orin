@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:38.949009
-//+ Revised: 	2026/11/13 13:04:33.686408
+//+ Revised: 	2026/11/14 12:09:19.624541
 // -----------------------------------------------------------------------------
 
 //! The updater in the real window: the check, the banner, Settings › Updates, and the
@@ -16,6 +16,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use orin::update::signature;
 use serde_json::{Value, json};
 
 #[path = "../update/fixture.rs"]
@@ -25,6 +26,10 @@ use super::{driver::AppDriver, fixture::LaunchOptions, pixels, snapshots};
 use release_server::{FixtureServer, Reply};
 
 const TARGET: &str = "windows-x86_64";
+/// The key the fixture releases are signed with; the app is told its public half.
+const RELEASE_SECRET: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+/// Somebody else's key: what a release from a taken-over forge would be signed with.
+const STRANGER_SECRET: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 
 /// The next minor version after the running one, as the fixture release offers it.
 pub fn next_version() -> String {
@@ -45,6 +50,7 @@ fn github_release(server: &FixtureServer) -> String {
         "assets": [
             {"name": asset, "browser_download_url": server.url("/asset")},
             {"name": format!("{asset}.b3"), "browser_download_url": server.url("/asset.b3")},
+            {"name": format!("{asset}.sig"), "browser_download_url": server.url("/asset.sig")},
         ],
     })
     .to_string()
@@ -58,6 +64,7 @@ fn gitlab_release(server: &FixtureServer) -> String {
         "assets": {"links": [
             {"name": asset, "direct_asset_url": server.url("/asset")},
             {"name": format!("{asset}.b3"), "direct_asset_url": server.url("/asset.b3")},
+            {"name": format!("{asset}.sig"), "direct_asset_url": server.url("/asset.sig")},
         ]},
     })
     .to_string()
@@ -67,12 +74,24 @@ fn b3_line(bytes: &[u8]) -> String {
     format!("{}  {}\n", blake3::hash(bytes).to_hex(), asset())
 }
 
+/// The `.sig` that `secret` makes for `bytes` published as the next version's asset.
+fn sig_text(secret: &str, bytes: &[u8]) -> String {
+    let version = semver::Version::parse(&next_version()).expect("the next version is semver");
+    let hash = blake3::hash(bytes).to_hex();
+    signature::sign(
+        secret,
+        &signature::statement(&version, &asset(), hash.as_str()),
+    )
+    .expect("the fixture key signs")
+}
+
 /// A server offering the next version, whose binary is `binary`.
 fn release_server(binary: Vec<u8>) -> FixtureServer {
     let server = FixtureServer::start(vec![]);
     server.route("/github", Reply::ok(github_release(&server)));
     server.route("/gitlab", Reply::ok(gitlab_release(&server)));
     server.route("/asset.b3", Reply::ok(b3_line(&binary)));
+    server.route("/asset.sig", Reply::ok(sig_text(RELEASE_SECRET, &binary)));
     server.route("/asset", Reply::ok(binary));
     server
 }
@@ -82,6 +101,10 @@ fn release_options(server: &FixtureServer, open_project: bool) -> LaunchOptions 
         open_project,
         env: vec![
             ("ORIN_RELEASE_TARGET".into(), TARGET.into()),
+            (
+                "ORIN_UPDATE_KEY".into(),
+                signature::public_key(RELEASE_SECRET).expect("the fixture key has a public half"),
+            ),
             (
                 "ORIN_UPDATE_SOURCES".into(),
                 format!("{}|{}", server.url("/github"), server.url("/gitlab")),
@@ -364,10 +387,52 @@ pub fn install_restarts_into_same_project() -> Result<()> {
     expect_restart(&scratch, &copy, old)
 }
 
-/// A checksum that doesn't match leaves the binary alone and says why.
+/// A release signed by someone other than the maintainer is refused before its binary is even
+/// fetched, however well its checksum matches.
+pub fn wrong_signature_is_refused() -> Result<()> {
+    let binary = new_binary()?;
+    let server = release_server(binary.clone());
+    server.route("/asset.sig", Reply::ok(sig_text(STRANGER_SECRET, &binary)));
+    let (scratch, copy) = scratch_with_copy()?;
+    let mut options = release_options(&server, true);
+    options.executable = Some(copy.clone());
+    let mut app = AppDriver::start_in(scratch, options)?;
+    open_updates(&mut app)?;
+    app.click("update-check-now")?;
+    app.wait_for("offered update", |state| state["update"]["banner"] == true)?;
+    app.click("update-install")?;
+    let next = next_version();
+    let state = app.wait_for("signature error", |state| {
+        state["error"].as_str().is_some_and(|error| {
+            error
+                == format!(
+                    "The download of Orin {next} isn't signed with Orin's release key, so it wasn't installed."
+                )
+        })
+    })?;
+    ensure!(
+        state["update"]["installed"].is_null(),
+        "nothing was installed"
+    );
+    ensure!(!installed_marker(&copy)?, "the binary is untouched");
+    ensure!(
+        server.requests("/asset") == 0,
+        "the unsigned binary was downloaded"
+    );
+    ensure!(
+        leftover_downloads(app.scratch()) == 0,
+        "nothing was left in the download folder"
+    );
+    let capture = app.window.capture_settled()?;
+    pixels::assert_visible_controls(&capture, &state)?;
+    app.shutdown()
+}
+
+/// A binary that doesn't match its signed checksum leaves the installed one alone and says why.
 pub fn wrong_checksum_is_refused() -> Result<()> {
     let server = release_server(new_binary()?);
-    server.route("/asset.b3", Reply::ok(b3_line(b"something else")));
+    // The checksum and signature are the release's own; the bytes served are not.
+    server.route("/asset", Reply::ok(b"something else".to_vec()));
     let (scratch, copy) = scratch_with_copy()?;
     let mut options = release_options(&server, true);
     options.executable = Some(copy.clone());

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:35:20.600485
-//+ Revised: 	2026/11/12 09:16:35.665117
+//+ Revised: 	2026/11/14 12:09:10.805979
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -48,6 +48,10 @@ impl ProcessTree {
         resume::process(child.id())?;
         Ok(tree)
     }
+
+    /// The owner has waited for the first process. The job, not a process id, names this tree,
+    /// so nothing changes here; on Unix the id becomes reusable and is no longer signalled.
+    pub(crate) fn leader_reaped(&self) {}
 
     fn attach_handle(process: HANDLE) -> Result<Self> {
         // SAFETY: null pointers create an unnamed, non-inheritable job with default security.

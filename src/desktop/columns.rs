@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 23:45:33.117347
-//+ Revised: 	2026/11/12 13:59:43.052881
+//+ Revised: 	2026/11/13 17:36:10.397293
 // -----------------------------------------------------------------------------
 
 //! The four side-by-side workspace columns: width resolution, dividers, moving, and collapsing.
@@ -377,27 +377,53 @@ impl Workspace {
                 CursorStyle::OpenHand
             })
             .tooltip(hint(format!("Drag to move {}", column.title())))
-            .child(icon(
-                column_icon(column),
-                if moving { colors.accent } else { colors.muted },
-            ))
-            .child(
-                // Below its titled width the header keeps only the icon rather than a cut-off word.
-                theme::clipped(if width >= titled_width(column) {
-                    column.title().to_uppercase()
-                } else {
-                    String::new()
-                })
-                .ml_1()
-                .text_size(theme::scaled(theme::TINY_TEXT))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(rgb(if moving {
-                    colors.text
-                } else {
-                    colors.soft_text
-                })),
-            )
-            .child(measured(handle_id, !self.closing, &self.controls))
+            .when(matches!(column, Column::Code | Column::Agents), |handle| {
+                handle.min_w_0().child(
+                    div()
+                        .relative()
+                        .w(theme::scaled(8.))
+                        .h_full()
+                        .flex_shrink_0()
+                        .child(measured(handle_id.clone(), !self.closing, &self.controls)),
+                )
+            })
+            .when(column == Column::Code, |handle| {
+                handle.pl_0().min_w_0().child(self.code_tab(cx))
+            })
+            .when(column == Column::Agents, |handle| {
+                handle.pl_0().child(self.agent_tabs(cx))
+            })
+            .when(!matches!(column, Column::Code | Column::Agents), |handle| {
+                handle.child(icon(
+                    column_icon(column),
+                    if moving { colors.accent } else { colors.muted },
+                ))
+            })
+            .when(!matches!(column, Column::Code | Column::Agents), |handle| {
+                handle.child(
+                    // Below its titled width the header keeps only the icon rather than a cut-off word.
+                    theme::clipped(
+                        if !matches!(column, Column::Code | Column::Agents)
+                            && width >= titled_width(column)
+                        {
+                            column.title().to_uppercase()
+                        } else {
+                            String::new()
+                        },
+                    )
+                    .ml_1()
+                    .text_size(theme::scaled(theme::TINY_TEXT))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(rgb(if moving {
+                        colors.text
+                    } else {
+                        colors.soft_text
+                    })),
+                )
+            })
+            .when(!matches!(column, Column::Code | Column::Agents), |handle| {
+                handle.child(measured(handle_id, !self.closing, &self.controls))
+            })
             .when(!self.closing, |handle| {
                 handle.on_mouse_down(
                     MouseButton::Left,

@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:37.535812
-//+ Revised: 	2026/11/12 22:43:37.535812
+//+ Revised: 	2026/11/14 12:12:23.542907
 // -----------------------------------------------------------------------------
 
 //! A published release as the forges describe it, parsed without touching the network.
@@ -21,6 +21,8 @@ pub enum UpdateError {
     Version(String),
     #[error("the download didn't match its checksum")]
     Checksum,
+    #[error("the download isn't signed with Orin's release key")]
+    Signature,
     #[error("the download is larger than {0} MiB")]
     TooLarge(u64),
     #[error("the download was cancelled")]
@@ -121,10 +123,14 @@ mod tests {
             release.page,
             "https://github.com/Ran-n/orin/releases/tag/v0.3.0"
         );
-        assert_eq!(release.assets.len(), 6);
+        assert_eq!(release.assets.len(), 9);
         assert_eq!(
             release.asset("orin-0.3.0-linux-x86_64.b3").unwrap().url,
             "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-linux-x86_64.b3"
+        );
+        assert_eq!(
+            release.asset("orin-0.3.0-linux-x86_64.sig").unwrap().url,
+            "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-linux-x86_64.sig"
         );
     }
 
@@ -136,7 +142,7 @@ mod tests {
             release.page,
             "https://gitlab.com/Ran-n/orin/-/releases/v0.3.0"
         );
-        assert_eq!(release.assets.len(), 6);
+        assert_eq!(release.assets.len(), 9);
         assert!(
             release
                 .asset("orin-0.3.0-windows-x86_64.exe")

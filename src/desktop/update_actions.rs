@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/12 22:43:37.141130
-//+ Revised: 	2026/11/13 07:53:50.776324
+//+ Revised: 	2026/11/14 21:46:04.471059
 // -----------------------------------------------------------------------------
 
 //! Update checks and installs, wired to the window: timers, worker threads, banner state.
@@ -15,9 +15,10 @@
 use super::{events::Event, workspace::Workspace};
 use crate::update::{
     check::{UpdateStatus, check},
-    download::download,
+    download::{Proof, download},
     install::{download_dir, install},
     release::UpdateError,
+    signature::release_keys,
     source::{Timeouts, sources},
     target::{current_version, release_target},
 };
@@ -304,6 +305,7 @@ impl Workspace {
             release,
             asset,
             checksum,
+            signature,
         }) = self.update.status.clone()
         else {
             return;
@@ -344,7 +346,14 @@ impl Workspace {
                         }
                     }
                 };
-                let result = download(&http, &asset, &checksum, &dir, &cancel, progress)
+                let keys = release_keys();
+                let proof = Proof {
+                    checksum: &checksum,
+                    signature: &signature,
+                    version: &version,
+                    keys: &keys,
+                };
+                let result = download(&http, &asset, proof, &dir, &cancel, progress)
                     .and_then(|file| {
                         // Quit or Cancel during the hash check must not replace the binary.
                         if cancel.load(Ordering::Acquire) {
@@ -405,6 +414,12 @@ impl Workspace {
             Err(UpdateError::Checksum) => {
                 self.error = Some(format!(
                     "The download of Orin {} didn't match its checksum, so it wasn't installed.",
+                    downloading.version
+                ));
+            }
+            Err(UpdateError::Signature) => {
+                self.error = Some(format!(
+                    "The download of Orin {} isn't signed with Orin's release key, so it wasn't installed.",
                     downloading.version
                 ));
             }

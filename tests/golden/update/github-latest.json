@@ -33,6 +33,17 @@
       "browser_download_url": "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-windows-x86_64.exe.b3"
     },
     {
+      "url": "https://api.github.com/repos/Ran-n/orin/releases/assets/16",
+      "id": 16,
+      "name": "orin-0.3.0-windows-x86_64.exe.sig",
+      "label": "",
+      "content_type": "application/octet-stream",
+      "state": "uploaded",
+      "size": 100,
+      "download_count": 0,
+      "browser_download_url": "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-windows-x86_64.exe.sig"
+    },
+    {
       "url": "https://api.github.com/repos/Ran-n/orin/releases/assets/12",
       "id": 12,
       "name": "orin-0.3.0-linux-x86_64",
@@ -55,6 +66,17 @@
       "browser_download_url": "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-linux-x86_64.b3"
     },
     {
+      "url": "https://api.github.com/repos/Ran-n/orin/releases/assets/17",
+      "id": 17,
+      "name": "orin-0.3.0-linux-x86_64.sig",
+      "label": "",
+      "content_type": "application/octet-stream",
+      "state": "uploaded",
+      "size": 100,
+      "download_count": 0,
+      "browser_download_url": "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-linux-x86_64.sig"
+    },
+    {
       "url": "https://api.github.com/repos/Ran-n/orin/releases/assets/14",
       "id": 14,
       "name": "orin-0.3.0-macos-aarch64",
@@ -75,6 +97,17 @@
       "size": 100,
       "download_count": 0,
       "browser_download_url": "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-macos-aarch64.b3"
+    },
+    {
+      "url": "https://api.github.com/repos/Ran-n/orin/releases/assets/18",
+      "id": 18,
+      "name": "orin-0.3.0-macos-aarch64.sig",
+      "label": "",
+      "content_type": "application/octet-stream",
+      "state": "uploaded",
+      "size": 100,
+      "download_count": 0,
+      "browser_download_url": "https://github.com/Ran-n/orin/releases/download/v0.3.0/orin-0.3.0-macos-aarch64.sig"
     }
   ],
   "tarball_url": "https://api.github.com/repos/Ran-n/orin/tarball/v0.3.0",

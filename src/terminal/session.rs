@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:13:52.069077
-//+ Revised: 	2026/11/12 15:28:14.668177
+//+ Revised: 	2026/11/14 01:02:34.346310
 // -----------------------------------------------------------------------------
 
 use std::{
@@ -43,8 +43,21 @@ pub struct Session {
 impl Session {
     /// Process startup must run on a background thread, away from the UI.
     pub fn spawn_shell(cwd: &Path, rows: u16, cols: u16) -> Result<Self> {
+        Self::spawn_shell_in_path(cwd, rows, cols, None)
+    }
+
+    pub fn spawn_shell_in_path(
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        path: Option<&std::ffi::OsStr>,
+    ) -> Result<Self> {
         tracing::info!("starting terminal session");
-        Self::spawn_builder(super::shell::shell_command()?, cwd, rows, cols)
+        let mut command = super::shell::shell_command()?;
+        if let Some(path) = path {
+            command.env("PATH", path);
+        }
+        Self::spawn_builder(command, cwd, rows, cols)
     }
 
     pub(super) fn spawn_builder(
@@ -105,7 +118,7 @@ impl Session {
         let killer = child.clone_killer();
         // Replies to the shell's terminal queries go through the worker, so the output reader
         // never waits on the input writer (which can block while the shell's output backs up).
-        let (replies, reply_receiver) = mpsc::channel();
+        let (replies, reply_receiver) = mpsc::sync_channel(super::worker::REPLY_CAPACITY);
         let worker = Worker {
             child,
             master,
@@ -152,13 +165,22 @@ impl Session {
     /// Enqueue input without blocking; callers can retry a full queue.
     pub fn write(&self, bytes: &[u8]) -> Result<()> {
         ensure!(
+            self.try_write(bytes)?,
+            "Terminal input is busy; retry when it has caught up."
+        );
+        Ok(())
+    }
+
+    /// False means backpressure: retain these bytes and retry without losing input.
+    pub fn try_write(&self, bytes: &[u8]) -> Result<bool> {
+        ensure!(
             bytes.len() <= MAX_WRITE_BYTES,
             "Terminal input exceeds {MAX_WRITE_BYTES} bytes; send smaller chunks."
         );
         if bytes.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
-        self.enqueue(Command::Write(bytes.to_vec()))
+        self.try_enqueue(Command::Write(bytes.to_vec()))
     }
 
     pub fn resize(&self, rows: u16, cols: u16) -> Result<()> {
@@ -185,14 +207,20 @@ impl Session {
 
     fn enqueue(&self, command: Command) -> Result<()> {
         ensure!(
+            self.try_enqueue(command)?,
+            "Terminal input is busy; retry when it has caught up."
+        );
+        Ok(())
+    }
+
+    fn try_enqueue(&self, command: Command) -> Result<bool> {
+        ensure!(
             self.running.load(Ordering::Acquire) && !self.shutdown.load(Ordering::Acquire),
             "This terminal session has ended."
         );
         match self.commands.try_send(command) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                bail!("Terminal input is busy; retry when it has caught up.")
-            }
+            Ok(()) => Ok(true),
+            Err(TrySendError::Full(_)) => Ok(false),
             Err(TrySendError::Disconnected(_)) => bail!("This terminal session has ended."),
         }
     }

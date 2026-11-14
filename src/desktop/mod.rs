@@ -1,14 +1,16 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:18:29.082066
-//+ Revised: 	2026/11/12 22:43:39.330230
+//+ Revised: 	2026/11/14 01:02:31.337561
 // -----------------------------------------------------------------------------
 
 //! GPUI desktop entry point; domain services have no dependency on this module.
 
 mod activity_bar;
 mod agent_actions;
+mod agent_details;
 mod agent_layout;
+mod agent_panels;
 mod agent_view;
 mod agent_workspace;
 mod assets;
@@ -25,6 +27,7 @@ mod file_icons;
 mod layout;
 mod markdown;
 mod markdown_view;
+mod mascot_frame;
 mod menus;
 mod project_actions;
 mod providers;
@@ -95,10 +98,9 @@ pub fn run(options: Options) -> Result<(), String> {
                 "Orin could not locate your configuration folder. Use --settings FILE.".to_owned()
             })?,
     };
-    let (loaded, providers) = std::thread::scope(|scope| {
+    let loaded = std::thread::scope(|scope| {
         let settings = scope.spawn(|| store.load());
-        let providers = providers::probe_all();
-        (settings.join(), providers)
+        settings.join()
     });
     let (settings, startup_error, writable) = match loaded {
         Ok(Ok(settings)) => (settings, None, true),
@@ -110,6 +112,9 @@ pub fn run(options: Options) -> Result<(), String> {
     clean_update_leftovers();
     let failure = std::sync::Arc::new(std::sync::Mutex::new(None));
     let result = failure.clone();
+    let tool_path =
+        crate::process::launch::tool_path(&settings.tool_directories, !options.test_driver);
+    let providers = providers::probe_all_in(tool_path.as_deref());
     Application::new().with_assets(assets::Assets).run(move |cx: &mut App| {
         let mut bounds = Bounds::centered(None, size(px(settings.width.clamp(1000.,7680.)), px(settings.height.clamp(680.,4320.))), cx);
         if let Some((x,y))=settings.position{

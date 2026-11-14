@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:12:37.389561
-//+ Revised: 	2026/11/13 07:53:52.244100
+//+ Revised: 	2026/11/13 17:30:08.832693
 // -----------------------------------------------------------------------------
 
 use std::fs;
@@ -12,6 +12,23 @@ use orin::settings::{
     SettingsError, SettingsSection, SettingsStore, Theme, Updates, ViewerMode, WorkspaceSettings,
 };
 use tempfile::TempDir;
+
+#[test]
+fn tool_folders_round_trip_and_reject_relative_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = SettingsStore::new(directory.path().join("settings.json"));
+    let mut settings = WorkspaceSettings {
+        tool_directories: vec![directory.path().join("tools")],
+        ..WorkspaceSettings::default()
+    };
+    store.save(&settings).unwrap();
+    assert_eq!(
+        store.load().unwrap().tool_directories,
+        settings.tool_directories
+    );
+    settings.tool_directories = vec![PathBuf::from("relative/tools")];
+    assert!(settings.validate().is_err());
+}
 
 fn fixed_settings() -> WorkspaceSettings {
     let mut settings = WorkspaceSettings {

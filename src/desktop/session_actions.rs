@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:42:12.623216
-//+ Revised: 	2026/11/12 10:31:40.895275
+//+ Revised: 	2026/11/13 17:30:08.083748
 // -----------------------------------------------------------------------------
 
 //! Shell sessions belong to the Terminal pane, independently of structured agents.
@@ -34,8 +34,9 @@ impl Workspace {
             .to_owned();
         let sender = self.sender.clone();
         let generation = self.project_generation;
+        let tool_path = self.account_environment.path.clone();
         if self.submit(move || {
-            let result = Session::spawn_shell(&path, 24, 80);
+            let result = Session::spawn_shell_in_path(&path, 24, 80, tool_path.as_deref());
             if sender.send(Event::Shell { generation, result }).is_err() {
                 tracing::debug!("Workspace closed during shell start");
             }

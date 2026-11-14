@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 15:18:28.790673
-//+ Revised: 	2026/11/12 09:16:22.818514
+//+ Revised: 	2026/11/14 01:02:28.862576
 // -----------------------------------------------------------------------------
 
 //! Shared compact controls, tooltips, and measured hit rectangles for native UI verification.
@@ -142,6 +142,8 @@ pub struct ControlSpec<'a, 'b, T: 'static> {
     pub tooltip: Option<SharedString>,
     /// Fill the available width with content at the start, as in a list of sections.
     pub full_width: bool,
+    /// Taller, with interface-size text: the main action of an otherwise empty area.
+    pub large: bool,
     pub controls: &'a Controls,
     pub cx: &'a Context<'b, T>,
 }
@@ -154,6 +156,7 @@ impl<'a, 'b, T: 'static> ControlSpec<'a, 'b, T> {
             emphasis: Emphasis::Normal,
             tooltip: None,
             full_width: false,
+            large: false,
             controls,
             cx,
         }
@@ -174,6 +177,11 @@ impl<'a, 'b, T: 'static> ControlSpec<'a, 'b, T> {
         self
     }
 
+    pub fn large(mut self) -> Self {
+        self.large = true;
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
@@ -188,6 +196,11 @@ impl<'a, 'b, T: 'static> ControlSpec<'a, 'b, T> {
     ) -> AnyElement {
         let (background, foreground, hover) = self.emphasis.colors(self.enabled);
         let id = self.id;
+        let (height, text, padding) = if self.large {
+            (LARGE_HEIGHT, theme::TEXT_SIZE, horizontal_padding + 6.)
+        } else {
+            (theme::CONTROL_HEIGHT, theme::SMALL_TEXT, horizontal_padding)
+        };
         div()
             .id(SharedString::from(id.clone()))
             .relative()
@@ -196,16 +209,16 @@ impl<'a, 'b, T: 'static> ControlSpec<'a, 'b, T> {
             .when(self.full_width, |control| control.w_full().justify_start())
             .when(!self.full_width, |control| control.justify_center())
             .gap_1()
-            .h(theme::scaled(theme::CONTROL_HEIGHT))
-            .min_w(theme::scaled(theme::CONTROL_HEIGHT))
-            .px(px(horizontal_padding))
+            .h(theme::scaled(height))
+            .min_w(theme::scaled(height))
+            .px(px(padding))
             .flex_shrink_0()
             .rounded(theme::scaled(theme::RADIUS))
             .when_some(background, |element, background| {
                 element.bg(rgb(background))
             })
             .text_color(rgb(foreground))
-            .text_size(theme::scaled(theme::SMALL_TEXT))
+            .text_size(theme::scaled(text))
             .whitespace_nowrap()
             .child(content)
             .child(measured(id, self.enabled, self.controls))
@@ -261,6 +274,77 @@ impl<'a, 'b, T: 'static> ControlSpec<'a, 'b, T> {
             .child(label.into())
             .into_any_element();
         self.build(content, 7., action)
+    }
+
+    /// A label followed by an icon, as a drop-down shows its current value and a chevron.
+    pub fn text_icon(
+        self,
+        label: impl Into<SharedString>,
+        glyph: Icon,
+        action: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+    ) -> AnyElement {
+        let color = if self.enabled {
+            theme::colors().muted
+        } else {
+            theme::colors().disabled_text
+        };
+        let content = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(label.into())
+            .child(icon(glyph, color))
+            .into_any_element();
+        self.build(content, 8., action)
+    }
+
+    pub fn agent_text(
+        self,
+        provider: crate::agents::Provider,
+        label: impl Into<SharedString>,
+        action: impl Fn(&mut T, &mut Window, &mut Context<T>) + 'static,
+    ) -> AnyElement {
+        let color = if self.enabled {
+            agent_color(provider)
+        } else {
+            theme::colors().disabled_text
+        };
+        let label: SharedString = label.into();
+        if label.is_empty() {
+            return self.build(
+                icon(agent_icon(provider), color).into_any_element(),
+                0.,
+                action,
+            );
+        }
+        let content = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(icon(agent_icon(provider), color))
+            .child(label)
+            .into_any_element();
+        self.build(content, 7., action)
+    }
+}
+
+/// The height of a [`ControlSpec::large`] control at the default text size.
+const LARGE_HEIGHT: f32 = 32.0;
+
+/// Each agent's own brand colour for its logo; Codex's mark is drawn in the text colour.
+pub fn agent_color(provider: crate::agents::Provider) -> u32 {
+    match provider {
+        crate::agents::Provider::Claude => 0xd97757,
+        crate::agents::Provider::Codex => theme::colors().text,
+        crate::agents::Provider::Gemini => 0x4285f4,
+    }
+}
+
+pub fn agent_icon(provider: crate::agents::Provider) -> Icon {
+    match provider {
+        crate::agents::Provider::Claude => Icon::Claude,
+        crate::agents::Provider::Codex => Icon::OpenAi,
+        crate::agents::Provider::Gemini => Icon::Gemini,
     }
 }
 

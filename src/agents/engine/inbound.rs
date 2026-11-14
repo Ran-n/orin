@@ -1,7 +1,7 @@
 // -----------------------------------------------------------------------------
 //+ Authors: 	Ran# <ran.hash@proton.me>
 //+ Created: 	2026/11/11 17:52:05.186137
-//+ Revised: 	2026/11/12 13:59:40.081632
+//+ Revised: 	2026/11/14 01:02:24.072866
 // -----------------------------------------------------------------------------
 
 use super::*;
@@ -10,7 +10,9 @@ impl Engine {
     pub(super) fn frame(&mut self, frame: Value) -> Result<()> {
         if let Some(method) = frame["method"].as_str() {
             return match method {
-                "session/update" => updates::apply(&mut lock(&self.state), &frame["params"]),
+                "session/update" => {
+                    updates::apply_or_skip(&mut lock(&self.state), &frame["params"])
+                }
                 "session/request_permission" => self.permission(&frame),
                 _ => {
                     if let Some(id) = frame.get("id") {
