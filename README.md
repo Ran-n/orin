@@ -39,7 +39,7 @@ An agent-first development environment by **Breren**, for developers who direct 
 
 ## Project status
 
-Orin is in **early development**. Version 0.2.0 adds a Windows installer and launches without an extra console window.
+Orin is in **early development**. Version 0.3.0 adds signed updates, formatted agent replies with the agent's plan and tool calls in place, and agent logos.
 It opens projects, runs Claude Code, Codex,
 and Gemini CLI side by side, shows each permission request for your answer, and lets you review and edit the results.
 It has been verified on Windows; the Linux and macOS downloads are built but not yet verified on those systems.
